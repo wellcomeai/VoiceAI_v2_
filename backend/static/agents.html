@@ -760,6 +760,58 @@
         grid-template-columns: 1fr;
       }
     }
+    
+    /* Стили для функций */
+    .function-option {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.75rem;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .function-option:hover {
+      background-color: var(--bg-blue-light);
+    }
+
+    .function-option input {
+      margin: 0;
+    }
+
+    .function-info {
+      border: 1px solid var(--border-color);
+    }
+
+    .function-schema {
+      background-color: var(--white);
+      padding: 1rem;
+      border-radius: var(--radius-md);
+      overflow-x: auto;
+      font-family: monospace;
+      font-size: 0.875rem;
+      color: var(--text-dark);
+    }
+
+    .prompt-example {
+      background-color: var(--white);
+      padding: 1rem;
+      border-radius: var(--radius-md);
+      margin-top: 1rem;
+      border-left: 4px solid var(--primary-blue);
+    }
+    
+    .prompt-example pre {
+      background-color: var(--bg-light);
+      padding: 0.75rem;
+      border-radius: var(--radius-md);
+      overflow-x: auto;
+      font-family: monospace;
+      font-size: 0.875rem;
+      color: var(--text-dark);
+    }
   </style>
 </head>
 <body>
@@ -842,6 +894,7 @@
           <div class="tab active" data-tab="settings">Настройки</div>
           <div class="tab" data-tab="testing">Тестирование</div>
           <div class="tab" data-tab="embed">Встраивание</div>
+          <div class="tab" data-tab="functions">Функции</div>
         </div>
         
         <!-- Таб настроек -->
@@ -983,6 +1036,72 @@
             </div>
           </div>
         </div>
+        
+        <!-- Таб функций -->
+        <div class="tab-content" id="functions-tab">
+          <div class="form-section">
+            <h3 style="margin-bottom: 1rem;">Функции ассистента</h3>
+            <p>Включите необходимые функции для вашего ассистента:</p>
+            
+            <div class="form-group">
+              <label class="function-option">
+                <input type="checkbox" name="function-send_webhook" id="function-send_webhook">
+                <span>Отправка WebHook (n8n)</span>
+              </label>
+              
+              <div id="webhook-info" class="function-info" style="display: none; margin-top: 1rem; padding: 1rem; background-color: var(--bg-light); border-radius: var(--radius-md);">
+                <h4>Информация о функции:</h4>
+                <pre class="function-schema">
+{
+  "name": "send_webhook",
+  "description": "Отправляет данные на внешний вебхук (например, для n8n)",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "URL вебхука для отправки данных"
+      },
+      "event": {
+        "type": "string",
+        "description": "Код события (например, 'booking', 'request', 'notification')"
+      },
+      "payload": {
+        "type": "object",
+        "description": "Произвольные данные для отправки"
+      }
+    },
+    "required": ["url", "event"]
+  }
+}
+                </pre>
+                
+                <h4>Пример использования в промпте:</h4>
+                <div class="prompt-example">
+                  <p>Ты должен использовать функцию send_webhook для отправки данных пользователя на сервер.</p>
+                  <p>URL вебхука: https://n8n.example.com/webhook/123</p>
+                  <p>Когда пользователь запрашивает отправку данных, используй функцию send_webhook с этими параметрами:</p>
+                  <ul>
+                    <li>url: указанный выше URL вебхука</li>
+                    <li>event: тип события (например, 'booking', 'request', 'notification')</li>
+                    <li>payload: объект с релевантными данными</li>
+                  </ul>
+                  <p>Пример вызова:</p>
+                  <pre>
+{
+  "url": "https://n8n.example.com/webhook/123",
+  "event": "booking",
+  "payload": {
+    "name": "Иван Петров",
+    "time": "15:00",
+    "date": "2023-05-10"
+  }
+}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     
@@ -1040,6 +1159,16 @@
       const debugPanel = document.getElementById('debug-panel');
       const agentsListContainer = document.getElementById('agents-list-container');
       const editAgentContainer = document.getElementById('edit-agent-container');
+      
+      // Добавляем обработчик для чекбокса функции webhook
+      const webhookCheckbox = document.getElementById('function-send_webhook');
+      const webhookInfo = document.getElementById('webhook-info');
+      
+      if (webhookCheckbox && webhookInfo) {
+        webhookCheckbox.addEventListener('change', function() {
+          webhookInfo.style.display = this.checked ? 'block' : 'none';
+        });
+      }
       
       // Включение режима отладки (установите в true для показа панели отладки)
       const DEBUG_MODE = false;
@@ -1266,6 +1395,16 @@
             debugLog(`Голос "${agent.voice}" не найден в опциях формы`);
           }
           
+          // Загружаем настройки функций
+          const functions = agent.functions || [];
+          
+          // Установка состояния чекбокса
+          if (webhookCheckbox) {
+            const isEnabled = functions.some(func => func.name === 'send_webhook');
+            webhookCheckbox.checked = isEnabled;
+            webhookInfo.style.display = isEnabled ? 'block' : 'none';
+          }
+          
           debugLog('Форма успешно заполнена');
         },
         
@@ -1277,6 +1416,19 @@
             system_prompt: document.getElementById('system-prompt').value,
             voice: document.querySelector('input[name="voice"]:checked')?.value || 'alloy'
           };
+          
+          // Добавляем данные о функциях
+          const enabledFunctions = [];
+          
+          // Проверяем состояние функции webhook
+          if (webhookCheckbox && webhookCheckbox.checked) {
+            enabledFunctions.push({
+              name: "send_webhook",
+              description: "Отправляет данные на внешний вебхук (например, для n8n)"
+            });
+          }
+          
+          formData.functions = enabledFunctions;
           
           debugLog(`Получены данные формы: ${JSON.stringify(formData)}`);
           return formData;
