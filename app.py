@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.config import settings
 from backend.core.logging import setup_logging, get_logger
-from backend.api import auth, users, assistants, files, websocket, healthcheck
+from backend.api import auth, users, assistants, files, websocket, healthcheck, subscriptions
 from backend.models.base import create_tables
 from backend.db.session import engine
 
@@ -48,6 +48,7 @@ app.include_router(assistants.router, prefix="/api/assistants", tags=["Assistant
 app.include_router(files.router, prefix="/api/files", tags=["Files"])
 app.include_router(websocket.router, tags=["WebSocket"])
 app.include_router(healthcheck.router, tags=["Health"])
+app.include_router(subscriptions.router, prefix="/api/subscriptions", tags=["Subscriptions"])
 
 # Check and create directories for static files
 static_dir = os.path.join(os.getcwd(), "backend/static")
