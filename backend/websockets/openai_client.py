@@ -4,6 +4,8 @@ import uuid
 import base64
 import time
 import websockets
+from websockets.exceptions import ConnectionClosed
+
 from typing import Optional, List, Dict, Any, Union, AsyncGenerator
 
 from backend.core.config import settings
