@@ -2,7 +2,6 @@ import json
 import inspect
 import asyncio
 from typing import Dict, Any, Callable, Optional, List
-import requests
 import aiohttp
 
 from backend.core.logging import get_logger
@@ -172,21 +171,11 @@ async def send_webhook(args, assistant_config=None, client_id=None):
                         "message": "Webhook sent successfully",
                         "response": response_text[:200]  # Ограничиваем размер ответа
                     }
-        except:
-            # Если aiohttp не работает, используем обычный requests
-            response = requests.post(
-                url, 
-                json=data,
-                timeout=10,
-                headers={"Content-Type": "application/json"}
-            )
-            
-            # Возвращаем результат
-            return {
-                "status": response.status_code,
-                "message": "Webhook sent successfully",
-                "response": response.text[:200]  # Ограничиваем размер ответа
-            }
+        except Exception as e:
+            logger.error(f"Ошибка при отправке вебхука через aiohttp: {e}")
+            # Не используем requests в качестве запасного варианта,
+            # так как он вызывает ошибку импорта
+            return {"error": f"Webhook error: {str(e)}"}
     except Exception as e:
         logger.error(f"Ошибка при отправке вебхука: {e}")
         return {"error": f"Webhook error: {str(e)}"}
