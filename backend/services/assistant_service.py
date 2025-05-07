@@ -35,8 +35,16 @@ class AssistantService:
         """
         assistants = db.query(AssistantConfig).filter(AssistantConfig.user_id == user_id).all()
         
-        return [
-            AssistantResponse(
+        result = []
+        for assistant in assistants:
+            # Преобразуем функции в ожидаемый формат (список) если они представлены в виде словаря
+            functions = assistant.functions
+            if isinstance(functions, dict) and 'enabled_functions' in functions:
+                # Превращаем {'enabled_functions': ['func1', 'func2']} в [{'name': 'func1'}, {'name': 'func2'}]
+                functions = [{'name': func_name, 'description': f'Function {func_name}', 'parameters': {}} 
+                           for func_name in functions.get('enabled_functions', [])]
+            
+            result.append(AssistantResponse(
                 id=str(assistant.id),
                 user_id=str(assistant.user_id),
                 name=assistant.name,
@@ -45,7 +53,7 @@ class AssistantService:
                 voice=assistant.voice,
                 language=assistant.language,
                 google_sheet_id=assistant.google_sheet_id,
-                functions=assistant.functions,
+                functions=functions,
                 is_active=assistant.is_active,
                 is_public=assistant.is_public,
                 created_at=assistant.created_at,
@@ -53,8 +61,9 @@ class AssistantService:
                 total_conversations=assistant.total_conversations,
                 temperature=assistant.temperature,
                 max_tokens=assistant.max_tokens
-            ) for assistant in assistants
-        ]
+            ))
+        
+        return result
     
     @staticmethod
     async def get_assistant_by_id(db: Session, assistant_id: str, user_id: Optional[str] = None) -> AssistantConfig:
@@ -132,6 +141,13 @@ class AssistantService:
             
             logger.info(f"Assistant created: {assistant.id} for user {user_id}")
             
+            # Преобразуем функции в ожидаемый формат (список) если они представлены в виде словаря
+            functions = assistant.functions
+            if isinstance(functions, dict) and 'enabled_functions' in functions:
+                # Превращаем {'enabled_functions': ['func1', 'func2']} в [{'name': 'func1'}, {'name': 'func2'}]
+                functions = [{'name': func_name, 'description': f'Function {func_name}', 'parameters': {}} 
+                           for func_name in functions.get('enabled_functions', [])]
+            
             return AssistantResponse(
                 id=str(assistant.id),
                 user_id=str(assistant.user_id),
@@ -141,7 +157,7 @@ class AssistantService:
                 voice=assistant.voice,
                 language=assistant.language,
                 google_sheet_id=assistant.google_sheet_id,
-                functions=assistant.functions,
+                functions=functions,
                 is_active=assistant.is_active,
                 is_public=assistant.is_public,
                 created_at=assistant.created_at,
@@ -206,6 +222,13 @@ class AssistantService:
             
             logger.info(f"Assistant updated: {assistant_id}")
             
+            # Преобразуем функции в ожидаемый формат (список) если они представлены в виде словаря
+            functions = assistant.functions
+            if isinstance(functions, dict) and 'enabled_functions' in functions:
+                # Превращаем {'enabled_functions': ['func1', 'func2']} в [{'name': 'func1'}, {'name': 'func2'}]
+                functions = [{'name': func_name, 'description': f'Function {func_name}', 'parameters': {}} 
+                           for func_name in functions.get('enabled_functions', [])]
+            
             return AssistantResponse(
                 id=str(assistant.id),
                 user_id=str(assistant.user_id),
@@ -215,7 +238,7 @@ class AssistantService:
                 voice=assistant.voice,
                 language=assistant.language,
                 google_sheet_id=assistant.google_sheet_id,
-                functions=assistant.functions,
+                functions=functions,
                 is_active=assistant.is_active,
                 is_public=assistant.is_public,
                 created_at=assistant.created_at,
