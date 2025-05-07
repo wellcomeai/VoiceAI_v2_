@@ -3,9 +3,7 @@ import json
 import uuid
 import base64
 import time
-from typing import Optional, List, Dict, Any, Union
-import websockets
-from websockets.exceptions import ConnectionClosed
+from typing import Optional, List, Dict, Any, Union, AsyncGenerator
 
 from backend.core.config import settings
 from backend.core.logging import get_logger
