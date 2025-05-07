@@ -139,35 +139,51 @@ class OpenAIRealtimeClient:
         
         # Normalize function format
         if functions:
+            # Import function definitions
+            from backend.utils.function_registry import FUNCTION_DEFINITIONS
+            
             # Handle case when functions are in {enabled_functions: [...]} format
             if isinstance(functions, dict) and "enabled_functions" in functions:
                 enabled_functions = functions.get("enabled_functions", [])
                 
                 # Format for Realtime API
-                from backend.utils.function_registry import FUNCTION_REGISTRY
                 for func_name in enabled_functions:
-                    # Check if function exists in our registry
-                    if func_name in FUNCTION_REGISTRY:
-                        # Get function info from registry or use basic description
+                    # Check if function exists in our definitions
+                    if func_name in FUNCTION_DEFINITIONS:
+                        # Get function info from definitions
+                        func_def = FUNCTION_DEFINITIONS[func_name]
                         tools.append({
                             "type": "function",
-                            "function": {
-                                "name": func_name,
-                                "description": f"Function {func_name}",
-                                "parameters": {
-                                    "type": "object",
-                                    "properties": {},
-                                    "required": []
-                                }
-                            }
+                            "name": func_name,  # Add name at the top level
+                            "function": func_def
                         })
             else:
                 # Handle case when functions are already in the right format
                 for func in functions:
-                    tools.append({
-                        "type": "function",
-                        "function": func
-                    })
+                    func_name = func.get("name")
+                    if func_name and func_name in FUNCTION_DEFINITIONS:
+                        # Get function info from definitions
+                        func_def = FUNCTION_DEFINITIONS[func_name]
+                        tools.append({
+                            "type": "function",
+                            "name": func_name,  # Add name at the top level
+                            "function": func_def
+                        })
+                    elif func_name:
+                        # Use provided function definition
+                        tools.append({
+                            "type": "function",
+                            "name": func_name,  # Add name at the top level
+                            "function": {
+                                "name": func_name,
+                                "description": func.get("description", f"Function {func_name}"),
+                                "parameters": func.get("parameters", {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": []
+                                })
+                            }
+                        })
         
         # Set tool_choice
         if tools:
