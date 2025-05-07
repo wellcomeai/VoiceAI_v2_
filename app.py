@@ -10,10 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.config import settings
 from backend.core.logging import setup_logging, get_logger
-from backend.api import auth, users, assistants, files, websocket, healthcheck, subscriptions  # Добавлен импорт subscriptions
+from backend.api import auth, users, assistants, files, websocket, healthcheck
 from backend.models.base import create_tables
 from backend.db.session import engine
-from backend.api import integrations
+
 # Setup logging system
 setup_logging()
 
@@ -46,10 +46,9 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(users.router, prefix="/api/users", tags=["Users"])
 app.include_router(assistants.router, prefix="/api/assistants", tags=["Assistants"])
 app.include_router(files.router, prefix="/api/files", tags=["Files"])
-app.include_router(subscriptions.router, prefix="/api/subscriptions", tags=["Subscriptions"])  # Новый маршрут для подписок
 app.include_router(websocket.router, tags=["WebSocket"])
 app.include_router(healthcheck.router, tags=["Health"])
-app.include_router(integrations.router, prefix="/api/assistants", tags=["Integrations"])
+
 # Check and create directories for static files
 static_dir = os.path.join(os.getcwd(), "backend/static")
 if not os.path.exists(static_dir):
@@ -64,20 +63,8 @@ app.mount("/static", StaticFiles(directory="backend/static"), name="static")
 async def startup_event():
     # Create database tables if they don't exist
     create_tables(engine)
-    
-    # Initialize subscription plans
-    try:
-        from scripts.init_db import main_sync as init_db_sync
-        # Используем синхронную версию вместо асинхронной
-        success = init_db_sync()
-        if success:
-            logger.info("Subscription plans initialized successfully")
-        else:
-            logger.error("Failed to initialize subscription plans")
-    except Exception as e:
-        logger.error(f"Failed to initialize subscription plans: {str(e)}")
-    
     logger.info("Application started successfully")
+
 # Main page (redirects to static page)
 @app.get("/")
 async def root():
