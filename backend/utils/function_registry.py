@@ -1,12 +1,8 @@
 import json
 import inspect
 import asyncio
+import importlib.util
 from typing import Dict, Any, Callable, Optional, List
-import urllib.request
-import urllib.error
-import urllib.parse
-import ssl
-import socket
 import sys
 
 from backend.core.logging import get_logger
@@ -126,95 +122,127 @@ async def execute_function(
         logger.error(f"Ошибка выполнения функции '{function_name}': {e}")
         return {"error": str(e)}
 
-# Функция для HTTP запросов с использованием стандартной библиотеки Python
-def http_request(url, data=None, headers=None, method="GET", timeout=10):
+# Проверка доступности модулей
+def is_module_available(module_name):
+    """Проверяет, доступен ли модуль для импорта"""
+    try:
+        # Проверка на уже импортированные модули
+        if module_name in sys.modules:
+            return True
+            
+        # Проверка возможности импорта без фактического импорта
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, AttributeError):
+        return False
+
+# Функция для отправки HTTP-запроса с использованием доступных библиотек
+async def send_http_request(url, data, timeout=10):
     """
-    Выполняет HTTP запрос с использованием стандартной библиотеки Python.
+    Отправляет HTTP POST запрос, используя доступные библиотеки
     
     Args:
         url: URL для запроса
-        data: Данные для отправки
-        headers: Заголовки запроса
-        method: HTTP метод
+        data: Данные для отправки (будут преобразованы в JSON)
         timeout: Таймаут в секундах
         
     Returns:
-        Словарь с ответом сервера
+        Результат запроса
     """
+    # Пробуем использовать aiohttp
+    if is_module_available("aiohttp"):
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data, timeout=timeout) as response:
+                    response_text = await response.text()
+                    return {
+                        "status": response.status,
+                        "message": "Webhook sent successfully",
+                        "response": response_text[:200]  # Ограничиваем размер ответа
+                    }
+        except Exception as e:
+            logger.error(f"Ошибка при отправке запроса через aiohttp: {e}")
+            # Если возникла ошибка, продолжаем с другими методами
+    
+    # Пробуем использовать requests
+    if is_module_available("requests"):
+        import requests
+        try:
+            # Выполняем синхронный запрос в отдельном потоке
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.post(
+                    url, 
+                    json=data,
+                    timeout=timeout,
+                    headers={"Content-Type": "application/json"}
+                )
+            )
+            return {
+                "status": response.status_code,
+                "message": "Webhook sent successfully",
+                "response": response.text[:200]  # Ограничиваем размер ответа
+            }
+        except Exception as e:
+            logger.error(f"Ошибка при отправке запроса через requests: {e}")
+            # Если возникла ошибка, продолжаем с другими методами
+    
+    # Запасной вариант: используем стандартную библиотеку urllib
     try:
-        headers = headers or {}
+        import urllib.request
+        import urllib.error
+        import ssl
         
-        # Подготовка данных
-        if data is not None and isinstance(data, dict):
-            data = json.dumps(data).encode('utf-8')
-            headers['Content-Type'] = 'application/json'
+        # Преобразуем данные в JSON
+        data_json = json.dumps(data).encode('utf-8')
         
-        # Создание запроса
+        # Создаем запрос
         req = urllib.request.Request(
             url,
-            data=data,
-            headers=headers,
-            method=method
+            data=data_json,
+            headers={"Content-Type": "application/json"},
+            method="POST"
         )
         
-        # Игнорирование проверки SSL сертификатов (не рекомендуется для продакшена)
+        # Создаем контекст SSL (игнорируем проверку сертификатов)
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         
-        # Выполнение запроса
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
-            # Чтение ответа
-            response_data = response.read().decode('utf-8')
-            status_code = response.status
-            return {
-                "status": status_code,
-                "text": response_data,
-                "headers": dict(response.info())
-            }
-            
-    except urllib.error.HTTPError as e:
-        # Обработка HTTP ошибок
-        return {
-            "status": e.code,
-            "text": e.read().decode('utf-8') if hasattr(e, 'read') else str(e),
-            "error": str(e)
-        }
-    except (urllib.error.URLError, socket.timeout) as e:
-        # Обработка ошибок соединения
-        return {
-            "status": 0,
-            "text": "",
-            "error": str(e)
-        }
-    except Exception as e:
-        # Обработка прочих ошибок
-        return {
-            "status": 0,
-            "text": "",
-            "error": str(e)
-        }
-
-# Асинхронная обертка для HTTP запросов
-async def async_http_request(url, data=None, headers=None, method="GET", timeout=10):
-    """
-    Асинхронная обертка для HTTP запросов.
-    
-    Args:
-        url: URL для запроса
-        data: Данные для отправки
-        headers: Заголовки запроса
-        method: HTTP метод
-        timeout: Таймаут в секундах
+        # Выполняем запрос в отдельном потоке
+        loop = asyncio.get_event_loop()
         
-    Returns:
-        Словарь с ответом сервера
-    """
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, 
-        lambda: http_request(url, data, headers, method, timeout)
-    )
+        def make_request():
+            try:
+                with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
+                    response_data = response.read().decode('utf-8')
+                    return {
+                        "status": response.status,
+                        "message": "Webhook sent successfully",
+                        "response": response_data[:200]  # Ограничиваем размер ответа
+                    }
+            except urllib.error.HTTPError as e:
+                return {
+                    "status": e.code,
+                    "error": str(e),
+                    "response": e.read().decode('utf-8')[:200] if hasattr(e, 'read') else ""
+                }
+            except Exception as e:
+                return {
+                    "status": 0,
+                    "error": str(e),
+                    "response": ""
+                }
+                
+        result = await loop.run_in_executor(None, make_request)
+        return result
+    except Exception as e:
+        return {
+            "status": 0,
+            "error": f"Failed to send webhook: {str(e)}",
+            "response": ""
+        }
 
 # Регистрация встроенных функций
 @register_function("send_webhook")
@@ -256,52 +284,9 @@ async def send_webhook(args, assistant_config=None, client_id=None):
         if client_id:
             data["client_id"] = client_id
         
-        # Попытка использовать aiohttp, если доступен
-        try:
-            if 'aiohttp' in sys.modules or importlib.util.find_spec('aiohttp'):
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json=data, timeout=10) as response:
-                        response_text = await response.text()
-                        return {
-                            "status": response.status,
-                            "message": "Webhook sent successfully using aiohttp",
-                            "response": response_text[:200]  # Ограничиваем размер ответа
-                        }
-        except (ImportError, NameError):
-            logger.info("aiohttp не установлен, используем стандартную библиотеку")
+        # Отправляем запрос с помощью доступных библиотек
+        return await send_http_request(url, data)
         
-        # Попытка использовать requests, если доступен
-        try:
-            if 'requests' in sys.modules or importlib.util.find_spec('requests'):
-                import requests
-                response = requests.post(
-                    url, 
-                    json=data,
-                    timeout=10,
-                    headers={"Content-Type": "application/json"}
-                )
-                return {
-                    "status": response.status_code,
-                    "message": "Webhook sent successfully using requests",
-                    "response": response.text[:200]  # Ограничиваем размер ответа
-                }
-        except (ImportError, NameError):
-            logger.info("requests не установлен, используем стандартную библиотеку")
-        
-        # Использование стандартной библиотеки как запасной вариант
-        response = await async_http_request(
-            url=url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        
-        return {
-            "status": response.get("status", 0),
-            "message": "Webhook sent successfully using urllib",
-            "response": response.get("text", "")[:200]  # Ограничиваем размер ответа
-        }
     except Exception as e:
         logger.error(f"Ошибка при отправке вебхука: {e}")
         return {"error": f"Webhook error: {str(e)}"}
