@@ -187,11 +187,41 @@ async def handle_websocket_connection(
 async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket: WebSocket):
     if not openai_client.is_connected or not openai_client.ws:
         return
-
     try:
         while True:
             raw = await openai_client.ws.recv()
             response_data = json.loads(raw)
+            
+            # Обработка вызова функции
+            if response_data.get("type") == "function_call":
+                # Извлекаем данные вызова функции
+                function_call_id = response_data.get("function_call_id")
+                function_data = response_data.get("function", {})
+                
+                logger.info(f"Получен вызов функции: {function_data.get('name')}")
+                
+                # Сообщаем клиенту о том, что выполняется функция
+                await websocket.send_json({
+                    "type": "function_call.start",
+                    "function": function_data.get("name"),
+                    "function_call_id": function_call_id
+                })
+                
+                # Выполняем функцию
+                result = await openai_client.handle_function_call(response_data)
+                
+                # Отправляем результат в OpenAI
+                await openai_client.send_function_result(function_call_id, result)
+                
+                # Сообщаем клиенту о результате
+                await websocket.send_json({
+                    "type": "function_call.completed",
+                    "function": function_data.get("name"),
+                    "function_call_id": function_call_id,
+                    "result": result
+                })
+                
+                continue
 
             # если это аудио-чанк — отдаём как bytes
             if response_data.get("type") == "audio":
