@@ -2,7 +2,12 @@ import json
 import inspect
 import asyncio
 from typing import Dict, Any, Callable, Optional, List
-import aiohttp
+import urllib.request
+import urllib.error
+import urllib.parse
+import ssl
+import socket
+import sys
 
 from backend.core.logging import get_logger
 logger = get_logger(__name__)
@@ -121,6 +126,96 @@ async def execute_function(
         logger.error(f"Ошибка выполнения функции '{function_name}': {e}")
         return {"error": str(e)}
 
+# Функция для HTTP запросов с использованием стандартной библиотеки Python
+def http_request(url, data=None, headers=None, method="GET", timeout=10):
+    """
+    Выполняет HTTP запрос с использованием стандартной библиотеки Python.
+    
+    Args:
+        url: URL для запроса
+        data: Данные для отправки
+        headers: Заголовки запроса
+        method: HTTP метод
+        timeout: Таймаут в секундах
+        
+    Returns:
+        Словарь с ответом сервера
+    """
+    try:
+        headers = headers or {}
+        
+        # Подготовка данных
+        if data is not None and isinstance(data, dict):
+            data = json.dumps(data).encode('utf-8')
+            headers['Content-Type'] = 'application/json'
+        
+        # Создание запроса
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers=headers,
+            method=method
+        )
+        
+        # Игнорирование проверки SSL сертификатов (не рекомендуется для продакшена)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        # Выполнение запроса
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
+            # Чтение ответа
+            response_data = response.read().decode('utf-8')
+            status_code = response.status
+            return {
+                "status": status_code,
+                "text": response_data,
+                "headers": dict(response.info())
+            }
+            
+    except urllib.error.HTTPError as e:
+        # Обработка HTTP ошибок
+        return {
+            "status": e.code,
+            "text": e.read().decode('utf-8') if hasattr(e, 'read') else str(e),
+            "error": str(e)
+        }
+    except (urllib.error.URLError, socket.timeout) as e:
+        # Обработка ошибок соединения
+        return {
+            "status": 0,
+            "text": "",
+            "error": str(e)
+        }
+    except Exception as e:
+        # Обработка прочих ошибок
+        return {
+            "status": 0,
+            "text": "",
+            "error": str(e)
+        }
+
+# Асинхронная обертка для HTTP запросов
+async def async_http_request(url, data=None, headers=None, method="GET", timeout=10):
+    """
+    Асинхронная обертка для HTTP запросов.
+    
+    Args:
+        url: URL для запроса
+        data: Данные для отправки
+        headers: Заголовки запроса
+        method: HTTP метод
+        timeout: Таймаут в секундах
+        
+    Returns:
+        Словарь с ответом сервера
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, 
+        lambda: http_request(url, data, headers, method, timeout)
+    )
+
 # Регистрация встроенных функций
 @register_function("send_webhook")
 async def send_webhook(args, assistant_config=None, client_id=None):
@@ -161,21 +256,52 @@ async def send_webhook(args, assistant_config=None, client_id=None):
         if client_id:
             data["client_id"] = client_id
         
-        # Используем aiohttp для асинхронных запросов
+        # Попытка использовать aiohttp, если доступен
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data, timeout=10) as response:
-                    response_text = await response.text()
-                    return {
-                        "status": response.status,
-                        "message": "Webhook sent successfully",
-                        "response": response_text[:200]  # Ограничиваем размер ответа
-                    }
-        except Exception as e:
-            logger.error(f"Ошибка при отправке вебхука через aiohttp: {e}")
-            # Не используем requests в качестве запасного варианта,
-            # так как он вызывает ошибку импорта
-            return {"error": f"Webhook error: {str(e)}"}
+            if 'aiohttp' in sys.modules or importlib.util.find_spec('aiohttp'):
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=data, timeout=10) as response:
+                        response_text = await response.text()
+                        return {
+                            "status": response.status,
+                            "message": "Webhook sent successfully using aiohttp",
+                            "response": response_text[:200]  # Ограничиваем размер ответа
+                        }
+        except (ImportError, NameError):
+            logger.info("aiohttp не установлен, используем стандартную библиотеку")
+        
+        # Попытка использовать requests, если доступен
+        try:
+            if 'requests' in sys.modules or importlib.util.find_spec('requests'):
+                import requests
+                response = requests.post(
+                    url, 
+                    json=data,
+                    timeout=10,
+                    headers={"Content-Type": "application/json"}
+                )
+                return {
+                    "status": response.status_code,
+                    "message": "Webhook sent successfully using requests",
+                    "response": response.text[:200]  # Ограничиваем размер ответа
+                }
+        except (ImportError, NameError):
+            logger.info("requests не установлен, используем стандартную библиотеку")
+        
+        # Использование стандартной библиотеки как запасной вариант
+        response = await async_http_request(
+            url=url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        
+        return {
+            "status": response.get("status", 0),
+            "message": "Webhook sent successfully using urllib",
+            "response": response.get("text", "")[:200]  # Ограничиваем размер ответа
+        }
     except Exception as e:
         logger.error(f"Ошибка при отправке вебхука: {e}")
         return {"error": f"Webhook error: {str(e)}"}
