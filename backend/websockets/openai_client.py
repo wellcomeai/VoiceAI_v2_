@@ -3,6 +3,7 @@ import json
 import uuid
 import base64
 import time
+import websockets
 from typing import Optional, List, Dict, Any, Union, AsyncGenerator
 
 from backend.core.config import settings
