@@ -95,7 +95,6 @@ class OpenAIRealtimeClient:
         """
         if not self.is_connected or not self.ws:
             return False
-
         turn_detection = {
             "type": "server_vad",
             "threshold": 0.25,
@@ -103,17 +102,44 @@ class OpenAIRealtimeClient:
             "silence_duration_ms": 300,
             "create_response": True,
         }
-
         tools = []
+        tool_choice = "none"
+        
+        # Нормализация формата функций
         if functions:
-            for f in functions:
-                tools.append({
-                    "type": "function",
-                    "name": f["name"],
-                    "description": f["description"],
-                    "parameters": f["parameters"]
-                })
-
+            # Обрабатываем случай, когда функции в формате {enabled_functions: [...]}
+            if isinstance(functions, dict) and "enabled_functions" in functions:
+                enabled_functions = functions.get("enabled_functions", [])
+                
+                # Формат для Realtime API
+                for func_name in enabled_functions:
+                    # Проверяем, есть ли функция в нашем реестре
+                    from backend.utils.function_registry import FUNCTION_REGISTRY
+                    if func_name in FUNCTION_REGISTRY:
+                        # Получаем информацию о функции из реестра или используем базовое описание
+                        tools.append({
+                            "type": "function",
+                            "function": {
+                                "name": func_name,
+                                "description": f"Function {func_name}",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": []
+                                }
+                            }
+                        })
+            else:
+                # Обрабатываем случай, когда функции уже в нужном формате
+                for func in functions:
+                    tools.append({
+                        "type": "function",
+                        "function": func
+                    })
+        
+        # Устанавливаем tool_choice
+        if tools:
+            tool_choice = "auto"  # Позволяем модели решать, когда вызывать функции
         payload = {
             "type": "session.update",
             "session": {
@@ -126,13 +152,12 @@ class OpenAIRealtimeClient:
                 "temperature": 0.7,
                 "max_response_output_tokens": 500,
                 "tools": tools,
-                "tool_choice": "auto" if tools else "none"
+                "tool_choice": tool_choice
             }
         }
-
         try:
             await self.ws.send(json.dumps(payload))
-            logger.info(f"Настройки сессии отправлены (voice={voice})")
+            logger.info(f"Настройки сессии отправлены (voice={voice}, tools={len(tools)})")
         except Exception as e:
             logger.error(f"Error sending session.update: {e}")
             return False
@@ -155,6 +180,72 @@ class OpenAIRealtimeClient:
                 logger.error(f"Error creating Conversation in DB: {e}")
 
         return True
+
+    async def handle_function_call(self, function_call_data):
+        """
+        Обработать вызов функции от OpenAI.
+        
+        Args:
+            function_call_data: Данные вызова функции от OpenAI
+            
+        Returns:
+            Результат выполнения функции
+        """
+        try:
+            from backend.utils.function_registry import execute_function
+            
+            function_name = function_call_data.get("function", {}).get("name")
+            arguments = function_call_data.get("function", {}).get("arguments", {})
+            
+            # Если аргументы в формате строки (JSON), преобразуем их в словарь
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except:
+                    arguments = {}
+            
+            logger.info(f"Обработка вызова функции: {function_name} с аргументами: {arguments}")
+            
+            # Выполнение функции
+            result = await execute_function(
+                function_name=function_name, 
+                arguments=arguments,
+                assistant_config=self.assistant_config,
+                client_id=self.client_id
+            )
+            
+            return result
+        except Exception as e:
+            logger.error(f"Ошибка при обработке вызова функции: {e}")
+            return {"error": str(e)}
+
+    async def send_function_result(self, function_call_id, result):
+        """
+        Отправить результат выполнения функции обратно в OpenAI.
+        
+        Args:
+            function_call_id: ID вызова функции
+            result: Результат выполнения функции
+            
+        Returns:
+            True если успешно, False в противном случае
+        """
+        if not self.is_connected or not self.ws:
+            return False
+        
+        try:
+            payload = {
+                "type": "function_call_output",
+                "function_call_id": function_call_id,
+                "content": result
+            }
+            
+            await self.ws.send(json.dumps(payload))
+            logger.info(f"Результат функции отправлен: {function_call_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка отправки результата функции: {e}")
+            return False
 
     async def process_audio(self, audio_buffer: bytes) -> bool:
         if not self.is_connected or not self.ws or not audio_buffer:
