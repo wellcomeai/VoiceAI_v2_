@@ -11,6 +11,7 @@ from .assistants import router as assistants_router
 from .files import router as files_router
 from .websocket import router as websocket_router
 from .integrations import router as integrations_router
+from .subscriptions import router as subscriptions_router  # Добавлен импорт subscriptions
 
 # Create a main API router
 api_router = APIRouter()
@@ -22,6 +23,7 @@ api_router.include_router(assistants_router, tags=["Assistants"])
 api_router.include_router(files_router, tags=["Files"])
 api_router.include_router(websocket_router, tags=["WebSocket"])
 api_router.include_router(integrations_router, prefix="/assistants", tags=["Integrations"])
+api_router.include_router(subscriptions_router, tags=["Subscriptions"])  # Добавлена маршрутизация для subscriptions
 
 # Export all routers for use in app.py
 __all__ = [
@@ -31,5 +33,6 @@ __all__ = [
     "assistants_router",
     "files_router",
     "websocket_router",
-    "integrations_router"
+    "integrations_router",
+    "subscriptions_router"  # Добавлен в экспорт
 ]
