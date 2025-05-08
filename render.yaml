@@ -2,7 +2,7 @@ services:
   - type: web
     name: wellcomeai
     env: python
-    runtime: "python-3.10.11"    # ← вот здесь указываем нужную версию
+    runtime: "python-3.10.11"
     region: frankfurt
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:$PORT main:application
@@ -23,7 +23,7 @@ services:
       - key: PRODUCTION
         value: "true"
       - key: REALTIME_WS_URL
-        value: wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01
+        value: "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
       - key: CORS_ORIGINS
         value: "*"
 
