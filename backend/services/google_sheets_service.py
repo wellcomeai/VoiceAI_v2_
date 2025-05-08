@@ -9,27 +9,26 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 import logging
-import google.auth
-from googleapiclient.discovery import build
 from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 from backend.core.logging import get_logger
 from backend.core.config import settings
 
 logger = get_logger(__name__)
 
-# JSON содержимое сервисного аккаунта
+# JSON содержимое нового сервисного аккаунта
 SERVICE_ACCOUNT_INFO = {
   "type": "service_account",
   "project_id": "voiceai-459203",
-  "private_key_id": "07959c3b94944dae0e4c55b1061ed23c25beba54",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDU0jZFLYu/bKj5\nG9F5xjdxm9oxR80Zmdzr0+8I9aAwbC+wBFnBgqojp4PbfhGB/ZYiyHcw1UdtfI0u\nyS2S/J6GX5IBtuJ0r1nQCpLP+u5vzD9nTrHdgx5b0fLtkzbeh9H+WdRwTNMZlPB2\nGOnpHZU8mhu1cK526lYFXt7yZTcm6qCVyrDKJCAlxsk8gcGfxKey971J4+5Izbsg\nniX/d044ct2z6uo8lgR5LA2D/B3BhGDevjNxxWO6wWAIr6ff6Srwwaoj8JXc5PeH\nY71A+fILZ5LUgO9cDgT/FK+cE4EOIPgBvIOzzwnkijxH3/nyCQ7CmoUtd9AzWk83\npQNdG8zfAgMBAAECggEABR1kjW+JQOW+ax5CMQhF6IuMNHOdn4W8riC/DkI4/TXc\na9nu6pxMtPfkdiX/WgeC0Di7oiTRx0PacMtDIvxMNr3sCaLRbxlpALaxkm/m/jDc\nAsdLjm5n/LAGvu5ahMah9HW+sVCOvpKmuIOVFDOo43a+P25ljN4X/trk2gyssWzb\nPbP8FufReBEn3Bosx5FdVoIs3VSiIv9Ll3/QAiDrgmidyvHidQEYiFNeKwZIr9Ta\na7lKpDClbon2nhRZFPQIVwRr5CZJJgOFM+zCTQUsToYS7qZinGbr6iZePYXYJWSW\n8Q8g7roECyUlRjHTca6Dr4HTu3AOAcR1oVrgOTzkQQKBgQDpw4+BRhdKbY8IZIy8\n0Wv/I8PqC5nPoH+8PDNnoRScZV7LkoVeE7ShtrwWN8NeR45D1M2c8kASbN2t+HNC\niEI/cY4XnIWU+d8CeXloEv4cAsdp75IAXrmoN1EhB8IfT8hKa/pcjGr32A4PWZ+u\nF/gS2oTR/NPG6lXTNem3a7ydJwKBgQDpEKtQ8+MQ2Yw7UCZil1ZPkAgeVpnSZw8p\npYBgvCcqtQ1WNw2nC6W5cgmw2GAnDYo582HTXoe0WyPrkVRJbOzSy+SIyMbpFV/a\nI6abmrDBepxsI8gSMYpr6L/XwunKVoGuhGspjYggnOuHdJ+mDKhxAD5hqyY6GUHk\n7rIWnSyViQKBgB6UO2iAv7k3vbcuWA63InZ8ujsai2NSroL0KRFMTALta8obf6C/\n2SgyXEZXwxHJMH4FD2SRd/oxDYqdbo5sfqYH97t0+TB0w0xykYQgv+bwIh/ke+fa\nfFTZ753vguBPsnaxy01h/Pgw5h3x7mZ6sjPdK/TAKv/hVZrMeadJy6GPAoGAEA9Z\n/sYPi4WyKBQp0PlktS7ToGOPTfRUEyaYZhIRENxRAvPgOPaQgOreyBTg60//ima/\nAvWsnDz7iKwHBtg+qXfrU5GiQ0V5yWpTfL14GJz+UmVU0Awh4bW0IoYH3i1/2iq9\nx6s9CiJGCJt8tNCCeubtZYWJqM88vy3Dj9Nc0yECgYARtflxSPhwHnMreWXvkFWt\nPEd+HjXiiP+LQ3vvWbvGaTsip28clEWLQICxUez1dIAgU/fdMVh6DMyL6+Kwaqja\nOnjJ0lNsXEX/pxJuejxP11gWa6aZYYpCRdiwHcEFDaONmq2LqgeSN2MTwli+8yiq\nS/pDQHZCnzu8JpC/ofrh3g==\n-----END PRIVATE KEY-----\n",
-  "client_email": "voiceai@voiceai-459203.iam.gserviceaccount.com",
-  "client_id": "113806588169949164285",
+  "private_key_id": "ebd256a2b8016bd79ea47a402da57f54a5f02621",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDG78fw9x5hRmKH\npzJJT8vNJAjcp96qbxaR0WPYqFdhNMZqbAx5fUdZRAQPZBCLnG2EnxuFpLw3y0gE\nuIONaknyVfqsg5JMVNozJXQqczfQDVooATUmSYBkHnfQl9Nkwvgwa0kXLRgg8BWQ\nhJqcQzHPOu38E+1hdnW41YVyRuTuvn0djI8CgfUE7E3l9AHgeUfz/3c9LkpVxTl7\ng4geJZAPTVHMHU5+9iN1bBJzKXdrBkUGyKLxoYK2Eh2WFLpxpJqZLLRRmiJzRYX5\npHUC5m3wHqhg2QXXYWIPoUEczpyZE4ZrN4heN5dKxS9jNH9mkkNpwEbj9XyRPsYP\nZK7wSg+JAgMBAAECggEAToU7IlGvxI5e+pMURpp/4xcLhmid+yCAxIpkwhHj92K4\nxC2kmNlJbaLqhVamLyzNj3CrkMruXYlXgkF/7zPaPxQPrsL53jYJr/FjEhRLHcv/\nX1XmsBeH3TynZwZeMmHAS4A1J7gtU2bf5Bxq2C2vfc+ROpN0+SikG5Hvq6Tu3IpS\nDUmpRxm63wclgXVK21rZMGAqMH7H813BSfKO75+kiKgnoWKBSoqXmMj3jezwQ29Z\ncm1ONAj7rNUaK26qgtjnM/Ia7sAnDtbT8LbnMcQR27mKU3cDjTa42Jr/yNuHenkE\neTO87EVI0+OsD0/D6QXz4Ffq1eYk/qkTFxUxpFyRZwKBgQDsAFGYWsiGZIaZZNaJ\n0dFL5IolUj2UQzDFlxrgM1IIG6QmtWxGK0Aj70s9HkYvwYFxwrpoV9KkrJ74KHUK\nOyj8ACRMDes886jijT8T6qnXAf0kp+mcTZDmDsRJZUAmfIMF5SG+EFJjci3eneLE\nkbIbnz6CM43ogXZWE6YKSvMidwKBgQDXy2c5r+dfVC20dXLz3LN9LIu5qDpIclUR\nhyywTsvAM3eadaITuPMBGUUlP2M2FQeBhGzpyW799xLzi0ueDCk1y15o60LjEus0\nYh61aXSSxpH/qEagMywIPV9XaJaoSYofzV+Dfn2PPUTh47pu+zJRYitR4W1z+pVy\nnofnI/bd/wKBgCJ2QXP//bwyPb10jid97hQpAUtF4RwfW6Xe1NvcYqQwdR357B+q\n/SjCLrh0DUe3+BEGoHXQLUBCvMv8DGs8DFYQJzy745f49LZwbb+YyshM0AxkQKbE\nZN5TVbJqCJ4WHIPl27GHbKB88dnKMG0H4XxLGrOkl5pWHVOgduSV4T8tAoGACEcj\nNJFM3NlLz4pZ2IT01a5pxbtwUOsh3ERFMJY1NrBCvEga6YrEt5wSjPU7hw2TdiJw\nUx+JBHD/5xvG0M9CnW+ptXig3jkRkLba2raq5B5950K7QtXzsHU6PQ4kCVyY0dN9\nAHxPsLj29XtY4Xz9VyXe54swOay5IuZ17CXzCF0CgYEAiXnISoDQ3UCeKMEthHCI\nBJtOBS/SLFbYN1+lH5oVK1oRX6KFaYGbOr5hd94QrNH7AAf6zVQKqH4cVzS49wl5\nBtmRfXOgF4Li2OzlV0l49bVH8PqZ5/e8RlRHev4QjZ8KbeYfOBVBsxqKE/E2CWka\nueB17AwWp3SckmCer8AQU8M=\n-----END PRIVATE KEY-----\n",
+  "client_email": "voiceai-856@voiceai-459203.iam.gserviceaccount.com",
+  "client_id": "118051709108474225473",
   "auth_uri": "https://accounts.google.com/o/oauth2/auth",
   "token_uri": "https://oauth2.googleapis.com/token",
   "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/voiceai%40voiceai-459203.iam.gserviceaccount.com",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/voiceai-856%40voiceai-459203.iam.gserviceaccount.com",
   "universe_domain": "googleapis.com"
 }
 
@@ -169,7 +168,7 @@ class GoogleSheetsService:
             }
         except Exception as e:
             logger.error(f"Error verifying Google Sheet access: {str(e)}")
-            return {"success": False, "message": f"Error: {str(e)}"}
+            return {"success": False, "message": f"Error accessing Google Sheet: {str(e)}"}
 
     @staticmethod
     async def setup_sheet(sheet_id: str) -> bool:
