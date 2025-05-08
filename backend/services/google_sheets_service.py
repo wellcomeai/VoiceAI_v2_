@@ -14,7 +14,8 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-import google.auth.transport.aiohttp
+# Remove the aiohttp import that's causing issues
+# import google.auth.transport.aiohttp
 import google.auth.transport.requests
 
 from backend.core.logging import get_logger
