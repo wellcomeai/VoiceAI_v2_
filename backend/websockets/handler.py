@@ -15,6 +15,7 @@ from backend.models.assistant import AssistantConfig
 from backend.models.conversation import Conversation
 from backend.utils.audio_utils import base64_to_audio_buffer
 from backend.websockets.openai_client import OpenAIRealtimeClient
+from backend.services.google_sheets_service import GoogleSheetsService  # Новый импорт
 
 logger = get_logger(__name__)
 
@@ -187,6 +188,12 @@ async def handle_websocket_connection(
 async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket: WebSocket):
     if not openai_client.is_connected or not openai_client.ws:
         return
+    
+    # Переменные для хранения текста диалога и результата функции
+    user_message = ""
+    assistant_message = ""
+    function_result = None
+    
     try:
         while True:
             raw = await openai_client.ws.recv()
@@ -209,6 +216,9 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                 
                 # Выполняем функцию
                 result = await openai_client.handle_function_call(response_data)
+                
+                # Сохраняем результат для логирования
+                function_result = result
                 
                 # Отправляем результат в OpenAI
                 await openai_client.send_function_result(function_call_id, result)
@@ -237,14 +247,32 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
             t = response_data.get("type")
             if t == "response.text.done":
                 text = response_data.get("text", "")
+                assistant_message = text  # Сохраняем для логирования
+                
                 if openai_client.db_session and openai_client.conversation_record_id and text:
                     conv = openai_client.db_session.query(Conversation).get(
                         uuid.UUID(openai_client.conversation_record_id)
                     )
                     conv.assistant_message = text
                     openai_client.db_session.commit()
+                    
+                    # Если у ассистента есть google_sheet_id, логируем разговор
+                    if openai_client.assistant_config and openai_client.assistant_config.google_sheet_id:
+                        sheet_id = openai_client.assistant_config.google_sheet_id
+                        # Используем сохраненные значения
+                        asyncio.create_task(GoogleSheetsService.log_conversation(
+                            sheet_id=sheet_id,
+                            user_message=user_message,
+                            assistant_message=text,
+                            function_result=function_result
+                        ))
+                        # Сбрасываем результат функции после логирования
+                        function_result = None
+                        
             elif t == "conversation.item.input_audio_transcription.completed":
                 transcript = response_data.get("transcript", "")
+                user_message = transcript  # Сохраняем для логирования
+                
                 if openai_client.db_session and openai_client.conversation_record_id and transcript:
                     conv = openai_client.db_session.query(Conversation).get(
                         uuid.UUID(openai_client.conversation_record_id)
