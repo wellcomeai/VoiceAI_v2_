@@ -1,6 +1,6 @@
 """
 Google Sheets service для WellcomeAI application.
-С подробной диагностикой и исправленной областью видимости.
+С расширенной диагностикой JWT подписи для отладки проблем.
 """
 
 import os
@@ -13,6 +13,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 import aiohttp
+import hashlib
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -44,9 +45,97 @@ SERVICE_ACCOUNT_INFO = {
 }
 
 class GoogleSheetsService:
-    """Service for Google Sheets logging with detailed diagnostics"""
+    """Service for Google Sheets logging with enhanced JWT signature debugging"""
     
     _service = None
+    
+    @staticmethod
+    async def _deep_jwt_diagnostics():
+        """Подробная диагностика проблем с JWT подписью"""
+        logger.info("=== ENHANCED JWT SIGNATURE DIAGNOSTICS ===")
+        
+        # Проверка приватного ключа в SERVICE_ACCOUNT_INFO
+        try:
+            from cryptography.hazmat.primitives.serialization import load_pem_private_key
+            from cryptography.hazmat.backends import default_backend
+            
+            logger.info("Testing private key format with cryptography...")
+            
+            # Извлечь приватный ключ
+            private_key = SERVICE_ACCOUNT_INFO.get("private_key", "")
+            
+            # Проверить наличие переносов строк
+            real_newlines_count = private_key.count("\n")
+            logger.info(f"Real newlines count in private_key: {real_newlines_count}")
+            
+            # Проверить, корректен ли ключ для парсинга
+            try:
+                # Попытка загрузить PEM
+                key_bytes = private_key.encode('utf-8')
+                loaded_key = load_pem_private_key(
+                    key_bytes, 
+                    password=None, 
+                    backend=default_backend()
+                )
+                logger.info("✅ Successfully parsed private key with cryptography")
+                
+                # Вычисляем MD5 хеш для идентификации ключа (без прямого логирования)
+                key_hash = hashlib.md5(key_bytes).hexdigest()
+                logger.info(f"Private key MD5 hash: {key_hash}")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to parse private key: {e}")
+                
+                # Показать формат начала и конца ключа для диагностики
+                if private_key:
+                    start = private_key[:40]
+                    end = private_key[-40:]
+                    logger.info(f"Key starts with: {start}")
+                    logger.info(f"Key ends with: {end}")
+        except ImportError:
+            logger.info("cryptography library not available for key validation")
+        
+        # Проверка подписи JWT вручную
+        try:
+            import jwt
+            
+            logger.info("Testing manual JWT creation...")
+            
+            # Создаем простой тестовый токен
+            payload = {
+                "iss": SERVICE_ACCOUNT_INFO.get("client_email", ""),
+                "scope": "https://www.googleapis.com/auth/spreadsheets",
+                "aud": "https://oauth2.googleapis.com/token",
+                "exp": int(time.time()) + 3600,
+                "iat": int(time.time())
+            }
+            
+            try:
+                # Попытка подписать JWT
+                private_key = SERVICE_ACCOUNT_INFO.get("private_key", "")
+                token = jwt.encode(
+                    payload,
+                    private_key,
+                    algorithm="RS256",
+                    headers={"kid": SERVICE_ACCOUNT_INFO.get("private_key_id", "")}
+                )
+                logger.info("✅ Successfully created test JWT token")
+                
+                # Проверяем корректность алгоритма
+                decoded_header = jwt.get_unverified_header(token)
+                logger.info(f"JWT header: {decoded_header}")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to create test JWT: {e}")
+        except ImportError:
+            logger.info("PyJWT library not available for manual JWT testing")
+            
+        # Вывод информации о системном времени
+        logger.info(f"System time: {datetime.now().isoformat()}")
+        logger.info(f"UTC time: {datetime.utcnow().isoformat()}")
+        logger.info(f"Timezone-aware time: {datetime.now(timezone.utc).isoformat()}")
+        
+        logger.info("=== END JWT DIAGNOSTICS ===")
     
     @staticmethod
     async def _log_environment_info():
@@ -66,6 +155,7 @@ class GoogleSheetsService:
                 file_stat = os.stat(SERVICE_ACCOUNT_FILE)
                 logger.info(f"Key file size: {file_stat.st_size} bytes")
                 logger.info(f"Key file permissions: {oct(file_stat.st_mode)}")
+                logger.info(f"Last modified: {datetime.fromtimestamp(file_stat.st_mtime).isoformat()}")
                 
                 # Проверка содержимого файла
                 try:
@@ -83,23 +173,37 @@ class GoogleSheetsService:
                         
                         for field in required_fields:
                             if field in key_data:
-                                # Для приватного ключа выводим только начало и конец
                                 if field == "private_key":
-                                    value = f"{key_data[field][:20]}...{key_data[field][-20:]}"
+                                    # Подробная диагностика приватного ключа
+                                    pk = key_data[field]
+                                    pk_lines = pk.split("\n")
+                                    logger.info(f"Private key contains {len(pk_lines)} lines")
+                                    logger.info(f"First line: {pk_lines[0]}")
+                                    logger.info(f"Last line: {pk_lines[-1]}")
+                                    
                                     # Проверяем наличие переносов строк
-                                    has_real_newlines = "\n" in key_data[field]
-                                    has_backslash_n = "\\n" in key_data[field]
+                                    has_real_newlines = "\n" in pk
+                                    has_backslash_n = "\\n" in pk
                                     logger.info(f"Private key contains \\n: {has_backslash_n}")
                                     logger.info(f"Private key contains real newlines: {has_real_newlines}")
+                                    
+                                    # Вычисляем MD5 хеш для сравнения
+                                    key_hash = hashlib.md5(pk.encode('utf-8')).hexdigest()
+                                    logger.info(f"File private key MD5 hash: {key_hash}")
+                                    
+                                    embedded_key = SERVICE_ACCOUNT_INFO.get("private_key", "")
+                                    embedded_key_hash = hashlib.md5(embedded_key.encode('utf-8')).hexdigest()
+                                    logger.info(f"Embedded private key MD5 hash: {embedded_key_hash}")
+                                    logger.info(f"Keys match: {key_hash == embedded_key_hash}")
                                 else:
                                     value = key_data[field]
-                                logger.info(f"Key file contains {field}: {value}")
+                                    # Безопасно логируем значения
+                                    if field in ["client_email", "project_id", "type"]:
+                                        logger.info(f"Key file contains {field}: {value}")
+                                    else:
+                                        logger.info(f"Key file contains {field}: (value present)")
                             else:
                                 logger.error(f"Key file missing required field: {field}")
-                                
-                        # Проверяем email сервисного аккаунта
-                        if "client_email" in key_data:
-                            logger.info(f"Service account email: {key_data['client_email']}")
                     except json.JSONDecodeError as e:
                         logger.error(f"Key file is not valid JSON: {str(e)}")
                         # Показываем часть содержимого для диагностики
@@ -107,21 +211,57 @@ class GoogleSheetsService:
                 except Exception as e:
                     logger.error(f"Error reading key file: {str(e)}")
             else:
-                # Попытка найти файлы в текущей директории
-                files = os.listdir(".")
-                json_files = [f for f in files if f.endswith(".json")]
-                logger.info(f"JSON files in current directory: {json_files}")
+                # Попытка найти файлы в текущей директории и родительских
+                logger.info("Searching for service account file in accessible directories")
+                
+                directories_to_check = [
+                    ".",
+                    "..",
+                    os.path.dirname(os.getcwd()),
+                    "/app",  # Типичное место для Render
+                    os.path.expanduser("~"),
+                ]
+                
+                for directory in directories_to_check:
+                    try:
+                        if os.path.exists(directory):
+                            files = os.listdir(directory)
+                            json_files = [f for f in files if f.endswith(".json")]
+                            if json_files:
+                                logger.info(f"JSON files in {directory}: {json_files}")
+                            else:
+                                logger.info(f"No JSON files found in {directory}")
+                    except (PermissionError, FileNotFoundError) as e:
+                        logger.info(f"Cannot access {directory}: {e}")
             
             # Проверка встроенных данных аккаунта
             logger.info("Checking embedded service account data...")
             try:
-                if "private_key" in SERVICE_ACCOUNT_INFO:
-                    private_key = SERVICE_ACCOUNT_INFO["private_key"]
-                    has_real_newlines = "\n" in private_key
-                    has_backslash_n = "\\n" in private_key
-                    logger.info(f"Embedded private key contains \\n: {has_backslash_n}")
-                    logger.info(f"Embedded private key contains real newlines: {has_real_newlines}")
-                    logger.info(f"Embedded service account email: {SERVICE_ACCOUNT_INFO.get('client_email', 'not found')}")
+                # Проверяем наличие всех необходимых полей
+                required_fields = ["type", "project_id", "private_key_id", "private_key", 
+                                  "client_email", "client_id"]
+                
+                for field in required_fields:
+                    if field in SERVICE_ACCOUNT_INFO:
+                        if field == "private_key":
+                            private_key = SERVICE_ACCOUNT_INFO["private_key"]
+                            has_real_newlines = "\n" in private_key
+                            has_backslash_n = "\\n" in private_key
+                            logger.info(f"Embedded private key contains \\n: {has_backslash_n}")
+                            logger.info(f"Embedded private key contains real newlines: {has_real_newlines}")
+                            
+                            # Подсчет реальных переносов строк
+                            newline_count = private_key.count("\n")
+                            logger.info(f"Embedded private key contains {newline_count} newlines")
+                            
+                            if newline_count < 10:
+                                logger.warning("⚠️ Private key has fewer newlines than expected. This may cause JWT signature problems.")
+                        elif field in ["client_email", "project_id", "type"]:
+                            logger.info(f"Embedded service account {field}: {SERVICE_ACCOUNT_INFO.get(field)}")
+                        else:
+                            logger.info(f"Embedded service account has {field} field")
+                    else:
+                        logger.error(f"Embedded service account missing required field: {field}")
             except Exception as e:
                 logger.error(f"Error checking embedded service account data: {str(e)}")
             
@@ -135,12 +275,67 @@ class GoogleSheetsService:
                 logger.info(f"Relevant environment variables: {json.dumps(env_vars)}")
             else:
                 logger.info("No Google or Render specific environment variables found")
-                
+            
+            # Вывод информации о Python ENV
+            logger.info(f"Python environment variables:")
+            logger.info(f"PYTHONPATH: {os.environ.get('PYTHONPATH', 'Not set')}")
+            logger.info(f"sys.path: {sys.path}")
+            
             logger.info(f"=== END DIAGNOSTICS ===")
             
         except Exception as e:
             logger.error(f"Error collecting environment info: {str(e)}")
             logger.error(traceback.format_exc())
+    
+    @classmethod
+    def _normalize_private_key(cls, private_key: str) -> str:
+        """
+        Нормализует приватный ключ, заменяя литералы `\\n` на настоящие переносы строк.
+        
+        Args:
+            private_key: Строка приватного ключа
+            
+        Returns:
+            Нормализованный приватный ключ
+        """
+        if not private_key:
+            return ""
+            
+        # Если в ключе есть буквальные \n (а не переносы строк), заменяем их
+        if "\\n" in private_key and "\n" not in private_key:
+            logger.info("Converting literal \\n to real newlines in private key")
+            return private_key.replace("\\n", "\n")
+            
+        return private_key
+    
+    @classmethod
+    def _prepare_temp_sa_file(cls, output_path: str = "temp_service_account.json") -> Optional[str]:
+        """
+        Создает временный файл сервисного аккаунта с нормализованным приватным ключом.
+        
+        Args:
+            output_path: Путь для создания временного файла
+            
+        Returns:
+            Путь к созданному файлу или None в случае ошибки
+        """
+        try:
+            # Копируем данные аккаунта
+            sa_data = dict(SERVICE_ACCOUNT_INFO)
+            
+            # Нормализуем приватный ключ
+            if "private_key" in sa_data:
+                sa_data["private_key"] = cls._normalize_private_key(sa_data["private_key"])
+            
+            # Записываем во временный файл
+            with open(output_path, 'w') as f:
+                json.dump(sa_data, f, indent=2)
+                
+            logger.info(f"Created temporary service account file at {output_path}")
+            return output_path
+        except Exception as e:
+            logger.error(f"Error creating temporary service account file: {str(e)}")
+            return None
     
     @classmethod
     def _get_sheets_service(cls):
@@ -163,47 +358,67 @@ class GoogleSheetsService:
             # Попытка создать учетные данные
             logger.info("Creating credentials...")
             
-            try:
-                # Сначала пробуем из файла, если он существует
-                if file_exists:
-                    logger.info("Creating credentials from file...")
+            # Пробуем разные способы создания credentials
+            credentials = None
+            errors = []
+            
+            # 1. Пробуем из файла если он существует
+            if file_exists:
+                try:
+                    logger.info("Attempting to create credentials from file...")
                     credentials = service_account.Credentials.from_service_account_file(
                         SERVICE_ACCOUNT_FILE,
                         scopes=['https://www.googleapis.com/auth/spreadsheets']
                     )
                     logger.info("Successfully created credentials from file")
-                else:
-                    # Если файл не существует, используем встроенные данные
-                    logger.info("Creating credentials from embedded data...")
+                except Exception as e:
+                    errors.append(f"Error from file: {str(e)}")
+                    logger.error(f"Failed to create credentials from file: {str(e)}")
+            
+            # 2. Пробуем из встроенных данных с нормализацией приватного ключа
+            if credentials is None:
+                try:
+                    logger.info("Attempting to create credentials from embedded info...")
+                    
+                    # Создаем копию с нормализованным ключом
+                    sa_info = dict(SERVICE_ACCOUNT_INFO)
+                    if "private_key" in sa_info:
+                        sa_info["private_key"] = cls._normalize_private_key(sa_info["private_key"])
+                    
                     credentials = service_account.Credentials.from_service_account_info(
-                        SERVICE_ACCOUNT_INFO,
+                        sa_info,
                         scopes=['https://www.googleapis.com/auth/spreadsheets']
                     )
                     logger.info("Successfully created credentials from embedded data")
-            except Exception as cred_error:
-                logger.error(f"Error creating credentials from primary methods: {str(cred_error)}")
-                logger.error(traceback.format_exc())
-                
-                # В случае ошибки пробуем сохранить данные во временный файл
+                except Exception as e:
+                    errors.append(f"Error from embedded info: {str(e)}")
+                    logger.error(f"Failed to create credentials from embedded info: {str(e)}")
+            
+            # 3. Пробуем через временный файл
+            if credentials is None:
                 try:
-                    logger.info("Attempting to create temporary service account file...")
-                    # Сохраняем содержимое во временный файл
-                    tmp_file_path = "temp_service_account.json"
-                    with open(tmp_file_path, 'w') as f:
-                        json.dump(SERVICE_ACCOUNT_INFO, f, indent=2)
-                    
-                    logger.info(f"Created temporary service account file: {tmp_file_path}")
-                    
-                    # Создаем учетные данные из временного файла
-                    credentials = service_account.Credentials.from_service_account_file(
-                        tmp_file_path,
-                        scopes=['https://www.googleapis.com/auth/spreadsheets']
-                    )
-                    logger.info("Successfully created credentials from temporary file")
-                except Exception as tmp_error:
-                    logger.error(f"Error with temporary file approach: {str(tmp_error)}")
-                    logger.error(traceback.format_exc())
-                    raise
+                    logger.info("Attempting to create credentials via temporary file...")
+                    temp_file = cls._prepare_temp_sa_file()
+                    if temp_file and os.path.exists(temp_file):
+                        credentials = service_account.Credentials.from_service_account_file(
+                            temp_file,
+                            scopes=['https://www.googleapis.com/auth/spreadsheets']
+                        )
+                        logger.info("Successfully created credentials from temporary file")
+                except Exception as e:
+                    errors.append(f"Error from temp file: {str(e)}")
+                    logger.error(f"Failed to create credentials from temporary file: {str(e)}")
+            
+            # Если все способы не сработали, запускаем глубокую диагностику JWT
+            if credentials is None:
+                logger.error(f"All credential creation methods failed: {errors}")
+                
+                # Запускаем синхронно (в текущем потоке) для отладки
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(cls._deep_jwt_diagnostics())
+                loop.close()
+                
+                raise Exception(f"Failed to create credentials after trying all methods")
             
             logger.info(f"Credentials created for: {credentials.service_account_email}")
             
@@ -216,6 +431,17 @@ class GoogleSheetsService:
             except google.auth.exceptions.RefreshError as refresh_error:
                 logger.error(f"Error refreshing token: {str(refresh_error)}")
                 logger.error(traceback.format_exc())
+                
+                # Добавляем детальную информацию об ошибке
+                if hasattr(refresh_error, 'response') and refresh_error.response:
+                    try:
+                        response = refresh_error.response
+                        logger.error(f"Token refresh response status: {response.status}")
+                        logger.error(f"Token refresh response headers: {response.headers}")
+                        logger.error(f"Token refresh response body: {response.data.decode('utf-8')}")
+                    except:
+                        logger.error("Could not extract details from refresh error response")
+                
                 raise
             except Exception as other_error:
                 logger.error(f"Unexpected error during token refresh: {str(other_error)}")
@@ -441,6 +667,12 @@ class GoogleSheetsService:
                         }
                 except google.auth.exceptions.RefreshError as refresh_error:
                     logger.error(f"Token refresh error: {str(refresh_error)}")
+                    
+                    # Проверим формат и содержимое приватного ключа
+                    loop = asyncio.new_event_loop()
+                    loop.run_until_complete(GoogleSheetsService._deep_jwt_diagnostics())
+                    loop.close()
+                    
                     return {
                         "success": False,
                         "message": f"Ошибка обновления токена: {str(refresh_error)}"
