@@ -280,3 +280,51 @@ async def get_conversation_stats(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve conversation statistics"
         )
+# backend/api/assistants.py - добавить новый эндпоинт
+
+@router.post("/{assistant_id}/verify-sheet", response_model=Dict[str, Any])
+async def verify_google_sheet(
+    sheet_data: Dict[str, str],
+    assistant_id: str = Path(..., description="The ID of the assistant"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Verify access to Google Sheet for an assistant.
+    
+    Args:
+        sheet_data: Dictionary with sheet_id
+        assistant_id: Assistant ID
+        current_user: Current authenticated user
+        db: Database session dependency
+    
+    Returns:
+        Verification result
+    """
+    try:
+        # Verify assistant belongs to user
+        await AssistantService.get_assistant_by_id(db, assistant_id, str(current_user.id))
+        
+        sheet_id = sheet_data.get("sheet_id")
+        if not sheet_id:
+            return {"success": False, "message": "No sheet ID provided"}
+        
+        # Import service here to avoid circular imports
+        from backend.services.google_sheets_service import GoogleSheetsService
+        
+        # Verify sheet access
+        result = await GoogleSheetsService.verify_sheet_access(sheet_id)
+        
+        # If successful, try to set up sheet with headers
+        if result.get("success"):
+            await GoogleSheetsService.setup_sheet(sheet_id)
+            
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in verify_google_sheet: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to verify Google Sheet: {str(e)}"
+        )
