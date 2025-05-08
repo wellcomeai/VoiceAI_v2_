@@ -1,7 +1,7 @@
 """
 Google Sheets service for WellcomeAI application.
 Handles logging to Google Sheets using the official Google Sheets API.
-Использует файл ключа сервисного аккаунта.
+Работает с публично доступными таблицами (без добавления сервисного аккаунта в редакторы).
 """
 
 import os
@@ -41,6 +41,11 @@ class GoogleSheetsService:
             return cls._service
             
         try:
+            # Проверяем наличие файла
+            if not os.path.exists(SERVICE_ACCOUNT_FILE):
+                logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
+                raise FileNotFoundError(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
+                
             # Создаем учетные данные из файла
             credentials = service_account.Credentials.from_service_account_file(
                 SERVICE_ACCOUNT_FILE,
@@ -67,7 +72,7 @@ class GoogleSheetsService:
         function_result: Optional[Dict[str, Any]] = None
     ) -> bool:
         """
-        Log conversation to Google Sheet
+        Log conversation to Google Sheet - работает с публично доступными таблицами
         
         Args:
             sheet_id: Google Sheet ID
@@ -123,13 +128,13 @@ class GoogleSheetsService:
                     # Проверяем на ошибки доступа (403)
                     if hasattr(e, 'resp') and e.resp.status == 403:
                         logger.error(f"Access denied to Google Sheet: {sheet_id}. Make sure the sheet is publicly editable.")
-                        return False, "Access denied. Make sure the Google Sheet is publicly editable with the link."
+                        return False, "Отказано в доступе. Убедитесь, что таблица открыта для редактирования по ссылке."
                     else:
                         logger.error(f"HTTP Error when appending values to Google Sheet: {str(e)}")
-                        return False, f"Error: {str(e)}"
+                        return False, f"Ошибка: {str(e)}"
                 except Exception as e:
                     logger.error(f"Unexpected error appending values to Google Sheet: {str(e)}")
-                    return False, f"Unexpected error: {str(e)}"
+                    return False, f"Непредвиденная ошибка: {str(e)}"
             
             success, error_message = await loop.run_in_executor(None, append_values)
             
@@ -146,7 +151,7 @@ class GoogleSheetsService:
     @staticmethod
     async def verify_sheet_access(sheet_id: str) -> Dict[str, Any]:
         """
-        Verify access to Google Sheet
+        Verify access to Google Sheet - проверяет публичный доступ к таблице
         
         Args:
             sheet_id: Google Sheet ID
@@ -155,7 +160,7 @@ class GoogleSheetsService:
             Dict with status and message
         """
         if not sheet_id:
-            return {"success": False, "message": "No sheet ID provided"}
+            return {"success": False, "message": "ID таблицы не указан"}
         
         try:
             # Вызываем в отдельном потоке, так как это блокирующая операция
@@ -193,7 +198,7 @@ class GoogleSheetsService:
                     
                     return {
                         "success": True,
-                        "message": f"Successfully connected to Google Sheet: {title}. Sheet is accessible.",
+                        "message": f"Успешно подключено к таблице: {title}. Таблица доступна для записи.",
                         "title": title
                     }
                 except HttpError as e:
@@ -204,23 +209,23 @@ class GoogleSheetsService:
                     if status_code == 403:
                         return {
                             "success": False,
-                            "message": "Access denied. Make sure the Google Sheet is publicly editable with the link."
+                            "message": "Отказано в доступе. Убедитесь, что таблица открыта для редактирования по ссылке."
                         }
                     elif status_code == 404:
                         return {
                             "success": False,
-                            "message": "Google Sheet not found. Please check the Sheet ID."
+                            "message": "Таблица не найдена. Пожалуйста, проверьте ID таблицы."
                         }
                     else:
                         return {
                             "success": False,
-                            "message": f"Error accessing Google Sheet: {error_details}"
+                            "message": f"Ошибка доступа к таблице: {error_details}"
                         }
                 except Exception as e:
                     logger.error(f"Unexpected error verifying sheet access: {str(e)}")
                     return {
                         "success": False,
-                        "message": f"Unexpected error: {str(e)}"
+                        "message": f"Непредвиденная ошибка: {str(e)}"
                     }
             
             result = await loop.run_in_executor(None, verify_access)
@@ -228,12 +233,12 @@ class GoogleSheetsService:
             
         except Exception as e:
             logger.error(f"Error verifying Google Sheet access: {str(e)}")
-            return {"success": False, "message": f"Error: {str(e)}"}
+            return {"success": False, "message": f"Ошибка: {str(e)}"}
 
     @staticmethod
     async def setup_sheet(sheet_id: str) -> bool:
         """
-        Set up sheet with headers if it's empty
+        Set up sheet with headers if it's empty - настраивает заголовки в пустой таблице
         
         Args:
             sheet_id: Google Sheet ID
