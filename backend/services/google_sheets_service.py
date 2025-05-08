@@ -7,6 +7,7 @@ import os
 import json
 import asyncio
 import time
+import google.auth.transport.requests
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
