@@ -33,3 +33,7 @@ numpy>=1.24.3      # Работа с числовыми данными
 # Для продакшена
 gunicorn>=21.2.0   # WSGI HTTP-сервер для продакшена
 openai>=1.12.0    # Клиент для API OpenAI
+google-auth>=2.16.0
+google-api-python-client>=2.80.0
+google-auth-httplib2>=0.1.0
+google-auth-oauthlib>=1.0.0
