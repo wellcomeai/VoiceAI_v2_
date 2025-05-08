@@ -12,9 +12,6 @@ from typing import Dict, Any, Optional, List
 import logging
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
-import google.auth.transport.aiohttp
-import google.auth.transport.requests
-import io
 
 from backend.core.logging import get_logger
 from backend.core.config import settings
@@ -40,37 +37,47 @@ class GoogleSheetsService:
     """Service for working with Google Sheets"""
     
     @staticmethod
-    async def _get_auth_headers():
+    def _get_credentials():
         """
-        Получить заголовки авторизации для использования с сервисным аккаунтом
+        Получить учетные данные сервисного аккаунта
         
         Returns:
-            Dict с заголовками авторизации
+            Credentials объект для сервисного аккаунта
         """
         try:
-            # Загружаем учетные данные напрямую из JSON-строки вместо файла
             credentials = service_account.Credentials.from_service_account_info(
                 SERVICE_ACCOUNT_INFO,
                 scopes=['https://www.googleapis.com/auth/spreadsheets']
             )
-            
-            # Создаем транспорт для обновления токена
-            request = google.auth.transport.requests.Request()
-            
-            # Убедимся, что токен действителен
-            credentials.refresh(request)
-            
-            # Получаем токен
-            token = credentials.token
-            
-            # Возвращаем заголовки авторизации
-            return {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json"
-            }
+            return credentials
         except Exception as e:
-            logger.error(f"Error generating auth headers: {str(e)}")
+            logger.error(f"Error generating credentials: {str(e)}")
             raise Exception(f"Auth error: {str(e)}")
+    
+    @staticmethod
+    async def _get_auth_token():
+        """
+        Получить токен авторизации
+        
+        Returns:
+            String с токеном авторизации
+        """
+        try:
+            credentials = GoogleSheetsService._get_credentials()
+            
+            # Обновляем токен в отдельном потоке, чтобы не блокировать асинхронный код
+            loop = asyncio.get_event_loop()
+            request = Request()
+            
+            def refresh_creds():
+                credentials.refresh(request)
+                return credentials.token
+                
+            token = await loop.run_in_executor(None, refresh_creds)
+            return token
+        except Exception as e:
+            logger.error(f"Error generating auth token: {str(e)}")
+            raise Exception(f"Auth token error: {str(e)}")
     
     @staticmethod
     async def log_conversation(
@@ -118,8 +125,14 @@ class GoogleSheetsService:
             # Construct request URL
             url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/A:D:append"
             
-            # Получаем заголовки авторизации
-            headers = await GoogleSheetsService._get_auth_headers()
+            # Получаем токен авторизации
+            token = await GoogleSheetsService._get_auth_token()
+            
+            # Формируем заголовки авторизации
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
             
             # Используем Google Sheets API с аутентификацией сервисного аккаунта
             async with aiohttp.ClientSession() as session:
@@ -162,8 +175,14 @@ class GoogleSheetsService:
             return {"success": False, "message": "No sheet ID provided"}
         
         try:
-            # Получаем заголовки авторизации
-            headers = await GoogleSheetsService._get_auth_headers()
+            # Получаем токен авторизации
+            token = await GoogleSheetsService._get_auth_token()
+            
+            # Формируем заголовки авторизации
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
             
             # Try to get sheet metadata to verify access
             async with aiohttp.ClientSession() as session:
@@ -209,8 +228,14 @@ class GoogleSheetsService:
             return False
             
         try:
-            # Получаем заголовки авторизации
-            headers = await GoogleSheetsService._get_auth_headers()
+            # Получаем токен авторизации
+            token = await GoogleSheetsService._get_auth_token()
+            
+            # Формируем заголовки авторизации
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
             
             # Check if sheet has data
             async with aiohttp.ClientSession() as session:
