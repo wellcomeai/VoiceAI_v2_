@@ -49,6 +49,77 @@ class GoogleSheetsService:
     
     _service = None
     
+    @classmethod
+    def _add_debug_hooks(cls):
+        """Добавляет отладочные хуки для перехвата JWT до отправки в Google API"""
+        try:
+            import google.oauth2._client
+            original_jwt_grant = google.oauth2._client.jwt_grant
+            
+            def debug_jwt_grant(*args, **kwargs):
+                """Отладочная обертка для jwt_grant"""
+                logger.info("=== Debugging actual JWT about to be sent to Google ===")
+                
+                # Декодируем JWT для проверки payload
+                import jwt
+                if len(args) > 1 and isinstance(args[1], str):
+                    try:
+                        token = args[1]
+                        header = jwt.get_unverified_header(token)
+                        payload = jwt.decode(token, options={"verify_signature": False})
+                        logger.info(f"JWT Header: {header}")
+                        logger.info(f"JWT Payload: {payload}")
+                        
+                        # Проверка времени
+                        exp = payload.get('exp', 0)
+                        iat = payload.get('iat', 0)
+                        if exp and iat:
+                            logger.info(f"JWT lifetime: {exp - iat} seconds")
+                            
+                            # Показываем времена в разных форматах
+                            from datetime import datetime
+                            iat_dt = datetime.fromtimestamp(iat)
+                            exp_dt = datetime.fromtimestamp(exp)
+                            logger.info(f"JWT iat: {iat_dt.isoformat()} (timestamp: {iat})")
+                            logger.info(f"JWT exp: {exp_dt.isoformat()} (timestamp: {exp})")
+                            
+                            # Проверка соответствия времени
+                            now = time.time()
+                            if iat > now + 300:  # Если iat больше текущего времени + 5 минут
+                                logger.warning(f"⚠️ JWT iat is in the future! Current time: {datetime.fromtimestamp(now).isoformat()} (timestamp: {now})")
+                        
+                        # Проверка формата поля aud
+                        aud = payload.get('aud', '')
+                        logger.info(f"JWT aud: {aud}")
+                        if aud != "https://oauth2.googleapis.com/token":
+                            logger.warning(f"⚠️ JWT aud field might be incorrect. Expected: https://oauth2.googleapis.com/token")
+                        
+                        # Проверка формата поля sub и iss
+                        sub = payload.get('sub', '')
+                        iss = payload.get('iss', '')
+                        logger.info(f"JWT sub: {sub}")
+                        logger.info(f"JWT iss: {iss}")
+                        if iss and iss != SERVICE_ACCOUNT_INFO.get("client_email"):
+                            logger.warning(f"⚠️ JWT iss doesn't match client_email. Expected: {SERVICE_ACCOUNT_INFO.get('client_email')}")
+                    except Exception as e:
+                        logger.error(f"Error decoding JWT: {e}")
+                        logger.error(traceback.format_exc())
+                
+                # Вызываем оригинальную функцию
+                try:
+                    return original_jwt_grant(*args, **kwargs)
+                except Exception as e:
+                    logger.error(f"Error in original JWT grant function: {e}")
+                    logger.error(traceback.format_exc())
+                    raise
+            
+            # Заменяем оригинальную функцию нашей отладочной версией
+            google.oauth2._client.jwt_grant = debug_jwt_grant
+            logger.info("JWT debug hooks installed")
+        except Exception as e:
+            logger.error(f"Failed to install JWT debug hooks: {e}")
+            logger.error(traceback.format_exc())
+    
     @staticmethod
     async def _deep_jwt_diagnostics():
         """Подробная диагностика проблем с JWT подписью"""
@@ -101,7 +172,7 @@ class GoogleSheetsService:
             
             logger.info("Testing manual JWT creation...")
             
-            # Создаем простой тестовый токен
+            # Создаем простой тестовый токен с правильной аудиторией
             payload = {
                 "iss": SERVICE_ACCOUNT_INFO.get("client_email", ""),
                 "scope": "https://www.googleapis.com/auth/spreadsheets",
@@ -125,8 +196,24 @@ class GoogleSheetsService:
                 decoded_header = jwt.get_unverified_header(token)
                 logger.info(f"JWT header: {decoded_header}")
                 
+                # Проверяем содержимое токена
+                decoded = jwt.decode(token, options={"verify_signature": False})
+                logger.info(f"JWT payload: {decoded}")
+                
+                # Проверка системного времени
+                curr_time = int(time.time())
+                logger.info(f"Current timestamp: {curr_time}")
+                logger.info(f"Token iat timestamp: {decoded.get('iat')}")
+                logger.info(f"Token exp timestamp: {decoded.get('exp')}")
+                
+                # Проверяем отклонение времени
+                time_diff = abs(curr_time - decoded.get('iat', 0))
+                if time_diff > 300:  # Отличие больше 5 минут
+                    logger.warning(f"⚠️ Large time difference detected: {time_diff} seconds")
+                
             except Exception as e:
                 logger.error(f"❌ Failed to create test JWT: {e}")
+                logger.error(traceback.format_exc())
         except ImportError:
             logger.info("PyJWT library not available for manual JWT testing")
             
@@ -134,6 +221,7 @@ class GoogleSheetsService:
         logger.info(f"System time: {datetime.now().isoformat()}")
         logger.info(f"UTC time: {datetime.utcnow().isoformat()}")
         logger.info(f"Timezone-aware time: {datetime.now(timezone.utc).isoformat()}")
+        logger.info(f"Timestamp: {int(time.time())}")
         
         logger.info("=== END JWT DIAGNOSTICS ===")
     
@@ -268,6 +356,7 @@ class GoogleSheetsService:
             # Проверка системного времени
             current_time = datetime.now().astimezone(timezone.utc)
             logger.info(f"System time (UTC): {current_time.isoformat()}")
+            logger.info(f"Timestamp: {int(time.time())}")
             
             # Проверка переменных окружения
             env_vars = {k: v for k, v in os.environ.items() if k.startswith(('GOOGLE_', 'RENDER_'))}
@@ -345,6 +434,9 @@ class GoogleSheetsService:
         Returns:
             Resource object для взаимодействия с Google Sheets API
         """
+        # Добавляем отладочные хуки в начале
+        cls._add_debug_hooks()
+        
         if cls._service is not None:
             return cls._service
             
@@ -441,6 +533,11 @@ class GoogleSheetsService:
                         logger.error(f"Token refresh response body: {response.data.decode('utf-8')}")
                     except:
                         logger.error("Could not extract details from refresh error response")
+                
+                # Запускаем глубокую диагностику JWT при ошибке обновления токена
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(cls._deep_jwt_diagnostics())
+                loop.close()
                 
                 raise
             except Exception as other_error:
