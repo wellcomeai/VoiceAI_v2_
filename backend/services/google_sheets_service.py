@@ -1,6 +1,6 @@
 """
 Google Sheets service для WellcomeAI application.
-С подробной диагностикой и реальными попытками подключения к Google API.
+С подробной диагностикой и исправленной областью видимости.
 """
 
 import os
@@ -10,7 +10,6 @@ import time
 import platform
 import traceback
 import sys
-import base64
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 import aiohttp
@@ -28,6 +27,21 @@ logger = get_logger(__name__)
 # Путь к файлу ключа сервисного аккаунта
 SERVICE_ACCOUNT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
                                    'voiceai-459203-ebd256a2b801.json')
+
+# Содержимое сервисного аккаунта (поле private_key отформатировано с реальными переносами строк)
+SERVICE_ACCOUNT_INFO = {
+  "type": "service_account",
+  "project_id": "voiceai-459203",
+  "private_key_id": "ebd256a2b8016bd79ea47a402da57f54a5f02621",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDG78fw9x5hRmKH\npzJJT8vNJAjcp96qbxaR0WPYqFdhNMZqbAx5fUdZRAQPZBCLnG2EnxuFpLw3y0gE\nuIONaknyVfqsg5JMVNozJXQqczfQDVooATUmSYBkHnfQl9Nkwvgwa0kXLRgg8BWQ\nhJqcQzHPOu38E+1hdnW41YVyRuTuvn0djI8CgfUE7E3l9AHgeUfz/3c9LkpVxTl7\ng4geJZAPTVHMHU5+9iN1bBJzKXdrBkUGyKLxoYK2Eh2WFLpxpJqZLLRRmiJzRYX5\npHUC5m3wHqhg2QXXYWIPoUEczpyZE4ZrN4heN5dKxS9jNH9mkkNpwEbj9XyRPsYP\nZK7wSg+JAgMBAAECggEAToU7IlGvxI5e+pMURpp/4xcLhmid+yCAxIpkwhHj92K4\nxC2kmNlJbaLqhVamLyzNj3CrkMruXYlXgkF/7zPaPxQPrsL53jYJr/FjEhRLHcv/\nX1XmsBeH3TynZwZeMmHAS4A1J7gtU2bf5Bxq2C2vfc+ROpN0+SikG5Hvq6Tu3IpS\nDUmpRxm63wclgXVK21rZMGAqMH7H813BSfKO75+kiKgnoWKBSoqXmMj3jezwQ29Z\ncm1ONAj7rNUaK26qgtjnM/Ia7sAnDtbT8LbnMcQR27mKU3cDjTa42Jr/yNuHenkE\neTO87EVI0+OsD0/D6QXz4Ffq1eYk/qkTFxUxpFyRZwKBgQDsAFGYWsiGZIaZZNaJ\n0dFL5IolUj2UQzDFlxrgM1IIG6QmtWxGK0Aj70s9HkYvwYFxwrpoV9KkrJ74KHUK\nOyj8ACRMDes886jijT8T6qnXAf0kp+mcTZDmDsRJZUAmfIMF5SG+EFJjci3eneLE\nkbIbnz6CM43ogXZWE6YKSvMidwKBgQDXy2c5r+dfVC20dXLz3LN9LIu5qDpIclUR\nhyywTsvAM3eadaITuPMBGUUlP2M2FQeBhGzpyW799xLzi0ueDCk1y15o60LjEus0\nYh61aXSSxpH/qEagMywIPV9XaJaoSYofzV+Dfn2PPUTh47pu+zJRYitR4W1z+pVy\nnofnI/bd/wKBgCJ2QXP//bwyPb10jid97hQpAUtF4RwfW6Xe1NvcYqQwdR357B+q\n/SjCLrh0DUe3+BEGoHXQLUBCvMv8DGs8DFYQJzy745f49LZwbb+YyshM0AxkQKbE\nZN5TVbJqCJ4WHIPl27GHbKB88dnKMG0H4XxLGrOkl5pWHVOgduSV4T8tAoGACEcj\nNJFM3NlLz4pZ2IT01a5pxbtwUOsh3ERFMJY1NrBCvEga6YrEt5wSjPU7hw2TdiJw\nUx+JBHD/5xvG0M9CnW+ptXig3jkRkLba2raq5B5950K7QtXzsHU6PQ4kCVyY0dN9\nAHxPsLj29XtY4Xz9VyXe54swOay5IuZ17CXzCF0CgYEAiXnISoDQ3UCeKMEthHCI\nBJtOBS/SLFbYN1+lH5oVK1oRX6KFaYGbOr5hd94QrNH7AAf6zVQKqH4cVzS49wl5\nBtmRfXOgF4Li2OzlV0l49bVH8PqZ5/e8RlRHev4QjZ8KbeYfOBVBsxqKE/E2CWka\nueB17AwWp3SckmCer8AQU8M=\n-----END PRIVATE KEY-----\n",
+  "client_email": "voiceai-856@voiceai-459203.iam.gserviceaccount.com",
+  "client_id": "118051709108474225473",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/voiceai-856%40voiceai-459203.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
 
 class GoogleSheetsService:
     """Service for Google Sheets logging with detailed diagnostics"""
@@ -98,6 +112,19 @@ class GoogleSheetsService:
                 json_files = [f for f in files if f.endswith(".json")]
                 logger.info(f"JSON files in current directory: {json_files}")
             
+            # Проверка встроенных данных аккаунта
+            logger.info("Checking embedded service account data...")
+            try:
+                if "private_key" in SERVICE_ACCOUNT_INFO:
+                    private_key = SERVICE_ACCOUNT_INFO["private_key"]
+                    has_real_newlines = "\n" in private_key
+                    has_backslash_n = "\\n" in private_key
+                    logger.info(f"Embedded private key contains \\n: {has_backslash_n}")
+                    logger.info(f"Embedded private key contains real newlines: {has_real_newlines}")
+                    logger.info(f"Embedded service account email: {SERVICE_ACCOUNT_INFO.get('client_email', 'not found')}")
+            except Exception as e:
+                logger.error(f"Error checking embedded service account data: {str(e)}")
+            
             # Проверка системного времени
             current_time = datetime.now().astimezone(timezone.utc)
             logger.info(f"System time (UTC): {current_time.isoformat()}")
@@ -130,66 +157,53 @@ class GoogleSheetsService:
             logger.info("Creating Google Sheets service...")
             
             # Проверяем наличие файла
-            if not os.path.exists(SERVICE_ACCOUNT_FILE):
-                logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
-                
-                # Пытаемся создать файл ключа из прямой строки
-                logger.info("Attempting to create service account file from embedded key...")
-                
-                # Содержимое сервисного аккаунта (поле private_key отформатировано с реальными переносами строк)
-                service_account_data = {
-                  "type": "service_account",
-                  "project_id": "voiceai-459203",
-                  "private_key_id": "ebd256a2b8016bd79ea47a402da57f54a5f02621",
-                  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDG78fw9x5hRmKH\npzJJT8vNJAjcp96qbxaR0WPYqFdhNMZqbAx5fUdZRAQPZBCLnG2EnxuFpLw3y0gE\nuIONaknyVfqsg5JMVNozJXQqczfQDVooATUmSYBkHnfQl9Nkwvgwa0kXLRgg8BWQ\nhJqcQzHPOu38E+1hdnW41YVyRuTuvn0djI8CgfUE7E3l9AHgeUfz/3c9LkpVxTl7\ng4geJZAPTVHMHU5+9iN1bBJzKXdrBkUGyKLxoYK2Eh2WFLpxpJqZLLRRmiJzRYX5\npHUC5m3wHqhg2QXXYWIPoUEczpyZE4ZrN4heN5dKxS9jNH9mkkNpwEbj9XyRPsYP\nZK7wSg+JAgMBAAECggEAToU7IlGvxI5e+pMURpp/4xcLhmid+yCAxIpkwhHj92K4\nxC2kmNlJbaLqhVamLyzNj3CrkMruXYlXgkF/7zPaPxQPrsL53jYJr/FjEhRLHcv/\nX1XmsBeH3TynZwZeMmHAS4A1J7gtU2bf5Bxq2C2vfc+ROpN0+SikG5Hvq6Tu3IpS\nDUmpRxm63wclgXVK21rZMGAqMH7H813BSfKO75+kiKgnoWKBSoqXmMj3jezwQ29Z\ncm1ONAj7rNUaK26qgtjnM/Ia7sAnDtbT8LbnMcQR27mKU3cDjTa42Jr/yNuHenkE\neTO87EVI0+OsD0/D6QXz4Ffq1eYk/qkTFxUxpFyRZwKBgQDsAFGYWsiGZIaZZNaJ\n0dFL5IolUj2UQzDFlxrgM1IIG6QmtWxGK0Aj70s9HkYvwYFxwrpoV9KkrJ74KHUK\nOyj8ACRMDes886jijT8T6qnXAf0kp+mcTZDmDsRJZUAmfIMF5SG+EFJjci3eneLE\nkbIbnz6CM43ogXZWE6YKSvMidwKBgQDXy2c5r+dfVC20dXLz3LN9LIu5qDpIclUR\nhyywTsvAM3eadaITuPMBGUUlP2M2FQeBhGzpyW799xLzi0ueDCk1y15o60LjEus0\nYh61aXSSxpH/qEagMywIPV9XaJaoSYofzV+Dfn2PPUTh47pu+zJRYitR4W1z+pVy\nnofnI/bd/wKBgCJ2QXP//bwyPb10jid97hQpAUtF4RwfW6Xe1NvcYqQwdR357B+q\n/SjCLrh0DUe3+BEGoHXQLUBCvMv8DGs8DFYQJzy745f49LZwbb+YyshM0AxkQKbE\nZN5TVbJqCJ4WHIPl27GHbKB88dnKMG0H4XxLGrOkl5pWHVOgduSV4T8tAoGACEcj\nNJFM3NlLz4pZ2IT01a5pxbtwUOsh3ERFMJY1NrBCvEga6YrEt5wSjPU7hw2TdiJw\nUx+JBHD/5xvG0M9CnW+ptXig3jkRkLba2raq5B5950K7QtXzsHU6PQ4kCVyY0dN9\nAHxPsLj29XtY4Xz9VyXe54swOay5IuZ17CXzCF0CgYEAiXnISoDQ3UCeKMEthHCI\nBJtOBS/SLFbYN1+lH5oVK1oRX6KFaYGbOr5hd94QrNH7AAf6zVQKqH4cVzS49wl5\nBtmRfXOgF4Li2OzlV0l49bVH8PqZ5/e8RlRHev4QjZ8KbeYfOBVBsxqKE/E2CWka\nueB17AwWp3SckmCer8AQU8M=\n-----END PRIVATE KEY-----\n",
-                  "client_email": "voiceai-856@voiceai-459203.iam.gserviceaccount.com",
-                  "client_id": "118051709108474225473",
-                  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                  "token_uri": "https://oauth2.googleapis.com/token",
-                  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/voiceai-856%40voiceai-459203.iam.gserviceaccount.com",
-                  "universe_domain": "googleapis.com"
-                }
-                
-                try:
-                    # Сохраняем содержимое во временный файл
-                    tmp_file_path = "temp_service_account.json"
-                    with open(tmp_file_path, 'w') as f:
-                        json.dump(service_account_data, f, indent=2)
-                    
-                    logger.info(f"Created temporary service account file: {tmp_file_path}")
-                    SERVICE_ACCOUNT_FILE = tmp_file_path
-                except Exception as write_error:
-                    logger.error(f"Error creating temporary service account file: {str(write_error)}")
-                    # Продолжаем с использованием встроенных данных
+            file_exists = os.path.exists(SERVICE_ACCOUNT_FILE)
+            logger.info(f"Service account file exists: {file_exists}")
             
             # Попытка создать учетные данные
-            logger.info("Creating credentials from service account file...")
+            logger.info("Creating credentials...")
             
             try:
-                # Пробуем из файла
-                if os.path.exists(SERVICE_ACCOUNT_FILE):
-                    with open(SERVICE_ACCOUNT_FILE, 'r') as f:
-                        file_content = f.read()
-                    logger.info(f"Read service account file, content length: {len(file_content)}")
-                    
+                # Сначала пробуем из файла, если он существует
+                if file_exists:
+                    logger.info("Creating credentials from file...")
                     credentials = service_account.Credentials.from_service_account_file(
                         SERVICE_ACCOUNT_FILE,
                         scopes=['https://www.googleapis.com/auth/spreadsheets']
                     )
                     logger.info("Successfully created credentials from file")
                 else:
-                    # Пробуем из встроенных данных
+                    # Если файл не существует, используем встроенные данные
                     logger.info("Creating credentials from embedded data...")
                     credentials = service_account.Credentials.from_service_account_info(
-                        service_account_data,
+                        SERVICE_ACCOUNT_INFO,
                         scopes=['https://www.googleapis.com/auth/spreadsheets']
                     )
                     logger.info("Successfully created credentials from embedded data")
             except Exception as cred_error:
-                logger.error(f"Error creating credentials: {str(cred_error)}")
+                logger.error(f"Error creating credentials from primary methods: {str(cred_error)}")
                 logger.error(traceback.format_exc())
-                raise
+                
+                # В случае ошибки пробуем сохранить данные во временный файл
+                try:
+                    logger.info("Attempting to create temporary service account file...")
+                    # Сохраняем содержимое во временный файл
+                    tmp_file_path = "temp_service_account.json"
+                    with open(tmp_file_path, 'w') as f:
+                        json.dump(SERVICE_ACCOUNT_INFO, f, indent=2)
+                    
+                    logger.info(f"Created temporary service account file: {tmp_file_path}")
+                    
+                    # Создаем учетные данные из временного файла
+                    credentials = service_account.Credentials.from_service_account_file(
+                        tmp_file_path,
+                        scopes=['https://www.googleapis.com/auth/spreadsheets']
+                    )
+                    logger.info("Successfully created credentials from temporary file")
+                except Exception as tmp_error:
+                    logger.error(f"Error with temporary file approach: {str(tmp_error)}")
+                    logger.error(traceback.format_exc())
+                    raise
             
             logger.info(f"Credentials created for: {credentials.service_account_email}")
             
