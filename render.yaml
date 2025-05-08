@@ -7,7 +7,7 @@ services:
     startCommand: gunicorn -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:$PORT main:application
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: 3.10
       - key: OPENAI_API_KEY
         sync: false
       - key: JWT_SECRET_KEY
