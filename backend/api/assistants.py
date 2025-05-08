@@ -18,6 +18,8 @@ from backend.schemas.assistant import AssistantCreate, AssistantUpdate, Assistan
 from backend.schemas.conversation import ConversationResponse, ConversationStats  # Изменен импорт schemas
 from backend.services.assistant_service import AssistantService  # Изменен импорт services
 from backend.services.conversation_service import ConversationService  # Изменен импорт services
+from typing import Dict, Any
+
 
 # Initialize logger
 logger = get_logger(__name__)
