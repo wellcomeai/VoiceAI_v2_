@@ -10,46 +10,67 @@ import aiohttp
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 import logging
-
-# Google API imports
 from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 from google.auth.transport.requests import Request
+import google.auth.transport.aiohttp
+import google.auth.transport.requests
+import io
 
 from backend.core.logging import get_logger
 from backend.core.config import settings
 
 logger = get_logger(__name__)
 
-# Path to service account file
-SERVICE_ACCOUNT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
-                                   'voiceai-459203-07959c3b9494.json')
+# JSON содержимое сервисного аккаунта
+SERVICE_ACCOUNT_INFO = {
+  "type": "service_account",
+  "project_id": "voiceai-459203",
+  "private_key_id": "07959c3b94944dae0e4c55b1061ed23c25beba54",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDU0jZFLYu/bKj5\nG9F5xjdxm9oxR80Zmdzr0+8I9aAwbC+wBFnBgqojp4PbfhGB/ZYiyHcw1UdtfI0u\nyS2S/J6GX5IBtuJ0r1nQCpLP+u5vzD9nTrHdgx5b0fLtkzbeh9H+WdRwTNMZlPB2\nGOnpHZU8mhu1cK526lYFXt7yZTcm6qCVyrDKJCAlxsk8gcGfxKey971J4+5Izbsg\nniX/d044ct2z6uo8lgR5LA2D/B3BhGDevjNxxWO6wWAIr6ff6Srwwaoj8JXc5PeH\nY71A+fILZ5LUgO9cDgT/FK+cE4EOIPgBvIOzzwnkijxH3/nyCQ7CmoUtd9AzWk83\npQNdG8zfAgMBAAECggEABR1kjW+JQOW+ax5CMQhF6IuMNHOdn4W8riC/DkI4/TXc\na9nu6pxMtPfkdiX/WgeC0Di7oiTRx0PacMtDIvxMNr3sCaLRbxlpALaxkm/m/jDc\nAsdLjm5n/LAGvu5ahMah9HW+sVCOvpKmuIOVFDOo43a+P25ljN4X/trk2gyssWzb\nPbP8FufReBEn3Bosx5FdVoIs3VSiIv9Ll3/QAiDrgmidyvHidQEYiFNeKwZIr9Ta\na7lKpDClbon2nhRZFPQIVwRr5CZJJgOFM+zCTQUsToYS7qZinGbr6iZePYXYJWSW\n8Q8g7roECyUlRjHTca6Dr4HTu3AOAcR1oVrgOTzkQQKBgQDpw4+BRhdKbY8IZIy8\n0Wv/I8PqC5nPoH+8PDNnoRScZV7LkoVeE7ShtrwWN8NeR45D1M2c8kASbN2t+HNC\niEI/cY4XnIWU+d8CeXloEv4cAsdp75IAXrmoN1EhB8IfT8hKa/pcjGr32A4PWZ+u\nF/gS2oTR/NPG6lXTNem3a7ydJwKBgQDpEKtQ8+MQ2Yw7UCZil1ZPkAgeVpnSZw8p\npYBgvCcqtQ1WNw2nC6W5cgmw2GAnDYo582HTXoe0WyPrkVRJbOzSy+SIyMbpFV/a\nI6abmrDBepxsI8gSMYpr6L/XwunKVoGuhGspjYggnOuHdJ+mDKhxAD5hqyY6GUHk\n7rIWnSyViQKBgB6UO2iAv7k3vbcuWA63InZ8ujsai2NSroL0KRFMTALta8obf6C/\n2SgyXEZXwxHJMH4FD2SRd/oxDYqdbo5sfqYH97t0+TB0w0xykYQgv+bwIh/ke+fa\nfFTZ753vguBPsnaxy01h/Pgw5h3x7mZ6sjPdK/TAKv/hVZrMeadJy6GPAoGAEA9Z\n/sYPi4WyKBQp0PlktS7ToGOPTfRUEyaYZhIRENxRAvPgOPaQgOreyBTg60//ima/\nAvWsnDz7iKwHBtg+qXfrU5GiQ0V5yWpTfL14GJz+UmVU0Awh4bW0IoYH3i1/2iq9\nx6s9CiJGCJt8tNCCeubtZYWJqM88vy3Dj9Nc0yECgYARtflxSPhwHnMreWXvkFWt\nPEd+HjXiiP+LQ3vvWbvGaTsip28clEWLQICxUez1dIAgU/fdMVh6DMyL6+Kwaqja\nOnjJ0lNsXEX/pxJuejxP11gWa6aZYYpCRdiwHcEFDaONmq2LqgeSN2MTwli+8yiq\nS/pDQHZCnzu8JpC/ofrh3g==\n-----END PRIVATE KEY-----\n",
+  "client_email": "voiceai@voiceai-459203.iam.gserviceaccount.com",
+  "client_id": "113806588169949164285",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/voiceai%40voiceai-459203.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
 
 class GoogleSheetsService:
     """Service for working with Google Sheets"""
     
     @staticmethod
-    def _get_sheets_service():
+    async def _get_auth_headers():
         """
-        Creates and returns an authenticated Google Sheets service
+        Получить заголовки авторизации для использования с сервисным аккаунтом
         
         Returns:
-            Google Sheets service object
+            Dict с заголовками авторизации
         """
         try:
-            # Load credentials from service account file
-            credentials = service_account.Credentials.from_service_account_file(
-                SERVICE_ACCOUNT_FILE,
+            # Загружаем учетные данные напрямую из JSON-строки вместо файла
+            credentials = service_account.Credentials.from_service_account_info(
+                SERVICE_ACCOUNT_INFO,
                 scopes=['https://www.googleapis.com/auth/spreadsheets']
             )
             
-            # Build the service
-            service = build('sheets', 'v4', credentials=credentials)
-            return service
+            # Создаем транспорт для обновления токена
+            request = google.auth.transport.requests.Request()
+            
+            # Убедимся, что токен действителен
+            credentials.refresh(request)
+            
+            # Получаем токен
+            token = credentials.token
+            
+            # Возвращаем заголовки авторизации
+            return {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
         except Exception as e:
-            logger.error(f"Error creating Google Sheets service: {str(e)}")
-            return None
+            logger.error(f"Error generating auth headers: {str(e)}")
+            raise Exception(f"Auth error: {str(e)}")
     
     @staticmethod
     async def log_conversation(
@@ -92,59 +113,38 @@ class GoogleSheetsService:
                     function_text = f"Error formatting result: {str(e)}"
             
             # Values row
-            values = [[now, user_message, assistant_message, function_text]]
+            values = [now, user_message, assistant_message, function_text]
             
-            # Create a loop to run the synchronous API call in a thread pool
-            loop = asyncio.get_event_loop()
+            # Construct request URL
+            url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/A:D:append"
             
-            # Run the synchronous API call in a thread pool
-            result = await loop.run_in_executor(
-                None,
-                lambda: GoogleSheetsService._append_values(sheet_id, values)
-            )
+            # Получаем заголовки авторизации
+            headers = await GoogleSheetsService._get_auth_headers()
             
-            return result
+            # Используем Google Sheets API с аутентификацией сервисного аккаунта
+            async with aiohttp.ClientSession() as session:
+                params = {
+                    "valueInputOption": "RAW",
+                    "insertDataOption": "INSERT_ROWS",
+                }
+                data = {
+                    "values": [values]
+                }
+                
+                async with session.post(url, params=params, json=data, headers=headers) as response:
+                    if response.status == 200:
+                        logger.info(f"Successfully logged conversation to Google Sheet: {sheet_id}")
+                        return True
+                    else:
+                        try:
+                            error_data = await response.json()
+                            logger.error(f"Error logging to Google Sheet: {error_data}")
+                        except:
+                            logger.error(f"Error logging to Google Sheet: Status {response.status}")
+                        return False
                         
         except Exception as e:
             logger.error(f"Error logging conversation to Google Sheet: {str(e)}")
-            return False
-    
-    @staticmethod
-    def _append_values(sheet_id, values):
-        """
-        Append values to a sheet using the Google API client
-        
-        Args:
-            sheet_id: Google Sheet ID
-            values: Values to append
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            service = GoogleSheetsService._get_sheets_service()
-            if not service:
-                return False
-                
-            body = {
-                'values': values
-            }
-            
-            result = service.spreadsheets().values().append(
-                spreadsheetId=sheet_id,
-                range='A:D',
-                valueInputOption='RAW',
-                insertDataOption='INSERT_ROWS',
-                body=body
-            ).execute()
-            
-            logger.info(f"Successfully logged conversation to Google Sheet: {sheet_id}")
-            return True
-        except HttpError as e:
-            logger.error(f"Error appending values to sheet: {str(e)}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error appending values: {str(e)}")
             return False
     
     @staticmethod
@@ -162,63 +162,37 @@ class GoogleSheetsService:
             return {"success": False, "message": "No sheet ID provided"}
         
         try:
-            # Run the synchronous API call in a thread pool
-            loop = asyncio.get_event_loop()
+            # Получаем заголовки авторизации
+            headers = await GoogleSheetsService._get_auth_headers()
             
-            result = await loop.run_in_executor(
-                None,
-                lambda: GoogleSheetsService._verify_sheet(sheet_id)
-            )
-            
-            return result
-            
+            # Try to get sheet metadata to verify access
+            async with aiohttp.ClientSession() as session:
+                url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
+                params = {
+                    "fields": "properties/title"
+                }
+                
+                async with session.get(url, params=params, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        title = data.get("properties", {}).get("title", "Untitled Spreadsheet")
+                        return {
+                            "success": True, 
+                            "message": f"Successfully connected to Google Sheet: {title}",
+                            "title": title
+                        }
+                    else:
+                        error_msg = f"Failed to access Google Sheet: Status {response.status}"
+                        try:
+                            error_data = await response.json()
+                            error_msg = error_data.get("error", {}).get("message", error_msg)
+                        except:
+                            pass
+                        
+                        return {"success": False, "message": error_msg}
         except Exception as e:
             logger.error(f"Error verifying Google Sheet access: {str(e)}")
             return {"success": False, "message": f"Error: {str(e)}"}
-
-    @staticmethod
-    def _verify_sheet(sheet_id):
-        """
-        Verify sheet access using the Google API client
-        
-        Args:
-            sheet_id: Google Sheet ID
-            
-        Returns:
-            Dict with verification results
-        """
-        try:
-            service = GoogleSheetsService._get_sheets_service()
-            if not service:
-                return {"success": False, "message": "Failed to create Google Sheets service"}
-                
-            # Try to get sheet metadata to verify access
-            sheet_metadata = service.spreadsheets().get(
-                spreadsheetId=sheet_id,
-                fields='properties.title'
-            ).execute()
-            
-            title = sheet_metadata.get('properties', {}).get('title', 'Untitled Spreadsheet')
-            return {
-                "success": True, 
-                "message": f"Successfully connected to Google Sheet: {title}",
-                "title": title
-            }
-            
-        except HttpError as e:
-            error_message = f"Failed to access Google Sheet: {str(e)}"
-            # Extract more details if available
-            try:
-                error_content = json.loads(e.content.decode())
-                if 'error' in error_content and 'message' in error_content['error']:
-                    error_message = error_content['error']['message']
-            except:
-                pass
-            
-            return {"success": False, "message": error_message}
-            
-        except Exception as e:
-            return {"success": False, "message": f"Unexpected error: {str(e)}"}
 
     @staticmethod
     async def setup_sheet(sheet_id: str) -> bool:
@@ -235,62 +209,39 @@ class GoogleSheetsService:
             return False
             
         try:
-            # Run the synchronous API call in a thread pool
-            loop = asyncio.get_event_loop()
+            # Получаем заголовки авторизации
+            headers = await GoogleSheetsService._get_auth_headers()
             
-            result = await loop.run_in_executor(
-                None,
-                lambda: GoogleSheetsService._setup_sheet_headers(sheet_id)
-            )
-            
-            return result
-            
+            # Check if sheet has data
+            async with aiohttp.ClientSession() as session:
+                url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/A1:D1"
+                
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        values = data.get("values", [])
+                        
+                        # If no data or headers, add them
+                        if not values:
+                            # Set up headers
+                            headers_url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/A1:D1"
+                            headers_data = {
+                                "values": [["Дата и время", "Пользователь", "Ассистент", "Результат функции"]]
+                            }
+                            params = {"valueInputOption": "RAW"}
+                            
+                            async with session.put(headers_url, params=params, json=headers_data, headers=headers) as headers_response:
+                                if headers_response.status == 200:
+                                    logger.info(f"Successfully set up headers in Google Sheet: {sheet_id}")
+                                    return True
+                                else:
+                                    logger.error(f"Failed to set up headers: Status {headers_response.status}")
+                                    return False
+                        
+                        return True
+                    else:
+                        logger.error(f"Failed to check sheet data: Status {response.status}")
+                        return False
         except Exception as e:
             logger.error(f"Error setting up Google Sheet: {str(e)}")
-            return False
-            
-    @staticmethod
-    def _setup_sheet_headers(sheet_id):
-        """
-        Set up sheet headers using the Google API client
-        
-        Args:
-            sheet_id: Google Sheet ID
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            service = GoogleSheetsService._get_sheets_service()
-            if not service:
-                return False
-                
-            # First check if headers already exist
-            result = service.spreadsheets().values().get(
-                spreadsheetId=sheet_id,
-                range='A1:D1'
-            ).execute()
-            
-            values = result.get('values', [])
-            
-            # If no headers, add them
-            if not values:
-                headers = [['Дата и время', 'Пользователь', 'Ассистент', 'Результат функции']]
-                
-                service.spreadsheets().values().update(
-                    spreadsheetId=sheet_id,
-                    range='A1:D1',
-                    valueInputOption='RAW',
-                    body={'values': headers}
-                ).execute()
-                
-                logger.info(f"Successfully set up headers in Google Sheet: {sheet_id}")
-            
-            return True
-            
-        except HttpError as e:
-            logger.error(f"Error setting up sheet headers: {str(e)}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error setting up headers: {str(e)}")
             return False
