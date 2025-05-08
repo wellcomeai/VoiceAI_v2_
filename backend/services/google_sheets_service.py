@@ -10,13 +10,57 @@ import aiohttp
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 import logging
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+import google.auth.transport.aiohttp
+import google.auth.transport.requests
 
 from backend.core.logging import get_logger
+from backend.core.config import settings
 
 logger = get_logger(__name__)
 
+# Путь к файлу сервисного аккаунта
+SERVICE_ACCOUNT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
+                                   'voiceai-459203-07959c3b9494.json')
+
 class GoogleSheetsService:
     """Service for working with Google Sheets"""
+    
+    @staticmethod
+    async def _get_auth_headers():
+        """
+        Получить заголовки авторизации для использования с сервисным аккаунтом
+        
+        Returns:
+            Dict с заголовками авторизации
+        """
+        try:
+            # Загружаем учетные данные из файла сервисного аккаунта
+            credentials = service_account.Credentials.from_service_account_file(
+                SERVICE_ACCOUNT_FILE,
+                scopes=['https://www.googleapis.com/auth/spreadsheets']
+            )
+            
+            # Создаем транспорт для обновления токена
+            request = google.auth.transport.requests.Request()
+            
+            # Убедимся, что токен действителен
+            credentials.refresh(request)
+            
+            # Получаем токен
+            token = credentials.token
+            
+            # Возвращаем заголовки авторизации
+            return {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+        except Exception as e:
+            logger.error(f"Error generating auth headers: {str(e)}")
+            return {}
     
     @staticmethod
     async def log_conversation(
@@ -64,8 +108,10 @@ class GoogleSheetsService:
             # Construct request URL
             url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/A:D:append"
             
-            # Use Google Sheets API v4 without authentication (works for public spreadsheets)
-            # Note: This requires the spreadsheet to be accessible to "Anyone with the link" with "Editor" access
+            # Получаем заголовки авторизации
+            headers = await GoogleSheetsService._get_auth_headers()
+            
+            # Используем Google Sheets API с аутентификацией сервисного аккаунта
             async with aiohttp.ClientSession() as session:
                 params = {
                     "valueInputOption": "RAW",
@@ -75,7 +121,7 @@ class GoogleSheetsService:
                     "values": [values]
                 }
                 
-                async with session.post(url, params=params, json=data) as response:
+                async with session.post(url, params=params, json=data, headers=headers) as response:
                     if response.status == 200:
                         logger.info(f"Successfully logged conversation to Google Sheet: {sheet_id}")
                         return True
@@ -106,6 +152,9 @@ class GoogleSheetsService:
             return {"success": False, "message": "No sheet ID provided"}
         
         try:
+            # Получаем заголовки авторизации
+            headers = await GoogleSheetsService._get_auth_headers()
+            
             # Try to get sheet metadata to verify access
             async with aiohttp.ClientSession() as session:
                 url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
@@ -113,7 +162,7 @@ class GoogleSheetsService:
                     "fields": "properties/title"
                 }
                 
-                async with session.get(url, params=params) as response:
+                async with session.get(url, params=params, headers=headers) as response:
                     if response.status == 200:
                         data = await response.json()
                         title = data.get("properties", {}).get("title", "Untitled Spreadsheet")
@@ -150,11 +199,14 @@ class GoogleSheetsService:
             return False
             
         try:
+            # Получаем заголовки авторизации
+            headers = await GoogleSheetsService._get_auth_headers()
+            
             # Check if sheet has data
             async with aiohttp.ClientSession() as session:
                 url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/A1:D1"
                 
-                async with session.get(url) as response:
+                async with session.get(url, headers=headers) as response:
                     if response.status == 200:
                         data = await response.json()
                         values = data.get("values", [])
@@ -168,7 +220,7 @@ class GoogleSheetsService:
                             }
                             params = {"valueInputOption": "RAW"}
                             
-                            async with session.put(headers_url, params=params, json=headers_data) as headers_response:
+                            async with session.put(headers_url, params=params, json=headers_data, headers=headers) as headers_response:
                                 if headers_response.status == 200:
                                     logger.info(f"Successfully set up headers in Google Sheet: {sheet_id}")
                                     return True
