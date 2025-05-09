@@ -205,188 +205,209 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
     try:
         logger.info(f"[DEBUG] Начало обработки сообщений от OpenAI для клиента {openai_client.client_id}")
         while True:
-            raw = await openai_client.ws.recv()
-            response_data = json.loads(raw)
-            
-            # Логирование каждого полученного сообщения
-            msg_type = response_data.get("type", "unknown")
-            logger.info(f"[DEBUG] Получено сообщение от OpenAI: тип={msg_type}")
-            
-            # Добавляем более детальное логирование для отладки ошибок
-            if msg_type == "error":
-                error_data = response_data.get("data", {})
-                error_message = error_data.get("message", "Неизвестная ошибка")
-                logger.error(f"[DEBUG] Получена ошибка от OpenAI: {error_message}")
-                logger.error(f"[DEBUG] Полное сообщение об ошибке: {json.dumps(response_data)}")
+            try:
+                raw = await openai_client.ws.recv()
+                response_data = json.loads(raw)
                 
-                # Отправляем ошибку клиенту для отладки
-                await websocket.send_json({
-                    "type": "error",
-                    "error": {
-                        "code": "openai_error",
-                        "message": error_message,
-                        "details": error_data
-                    }
-                })
-                continue
-            
-            # Обработка стандартных событий session
-            if msg_type in ["session.created", "session.updated", "session.initialized"]:
-                # Просто пересылаем клиенту
-                await websocket.send_json(response_data)
-                continue
+                # Логирование каждого полученного сообщения
+                msg_type = response_data.get("type", "unknown")
+                logger.info(f"[DEBUG] Получено сообщение от OpenAI: тип={msg_type}, полные данные: {json.dumps(response_data)[:200]}...")
                 
-            # Добавляем обработку text_delta сообщений для транскрипции речи пользователя
-            if msg_type == "text_delta" or msg_type == "text.delta":
-                if "data" in response_data:
-                    delta_value = response_data["data"].get("value", "")
-                    is_final = response_data["data"].get("final", False)
+                # Добавляем более детальное логирование для отладки ошибок
+                if msg_type == "error":
+                    error_data = response_data.get("data", {})
+                    error_message = error_data.get("message", "Неизвестная ошибка")
+                    logger.error(f"[DEBUG] Получена ошибка от OpenAI: {error_message}")
+                    logger.error(f"[DEBUG] Полное сообщение об ошибке: {json.dumps(response_data)}")
                     
-                    if delta_value:
-                        user_transcript += delta_value
-                        logger.info(f"[DEBUG] Добавлена часть транскрипции пользователя: '{delta_value}', получилось: '{user_transcript}'")
-                    
-                    if is_final:
-                        logger.info(f"[DEBUG] Получена финальная транскрипция пользователя: '{user_transcript}'")
+                    # Отправляем ошибку клиенту для отладки
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": {
+                            "code": "openai_error",
+                            "message": error_message,
+                            "details": error_data
+                        }
+                    })
+                    continue
+                
+                # Обработка стандартных событий session
+                if msg_type in ["session.created", "session.updated", "session.initialized"]:
+                    # Пересылаем клиенту в формате, который он ожидает
+                    await websocket.send_json({
+                        "type": msg_type,
+                        "session": response_data.get("data", {})
+                    })
+                    continue
+                
+                # Транскрипция текста пользователя
+                if msg_type == "transcript" or msg_type == "text":
+                    if "data" in response_data:
+                        transcript = response_data["data"].get("text", "")
+                        is_final = response_data["data"].get("final", False)
                         
-                        # Сохраняем сообщение пользователя в БД
-                        if openai_client.db_session and openai_client.conversation_record_id:
-                            try:
-                                conv = openai_client.db_session.query(Conversation).get(
-                                    uuid.UUID(openai_client.conversation_record_id)
-                                )
-                                if conv:
-                                    conv.user_message = user_transcript
-                                    openai_client.db_session.commit()
-                                    logger.info(f"[DEBUG] Сохранено сообщение пользователя в БД")
-                            except Exception as e:
-                                logger.error(f"[DEBUG] Ошибка сохранения в БД: {str(e)}")
-                                
-                # Отправляем информацию клиенту
-                await websocket.send_json({
-                    "type": "response.audio_transcript.delta",
-                    "delta": delta_value if "data" in response_data and "value" in response_data["data"] else "",
-                    "index": 0,  # 0 для пользователя
-                    "is_final": is_final if "data" in response_data and "final" in response_data["data"] else False
-                })
-                continue
-            
-            # Обработка событий текста от ассистента
-            if msg_type in ["text.content", "text.delta", "text.complete"]:
-                if "data" in response_data:
-                    text_content = response_data["data"].get("content", "")
-                    
-                    if text_content:
-                        if not assistant_transcript:
-                            assistant_transcript = text_content
-                        else:
-                            assistant_transcript += text_content
+                        if transcript:
+                            user_transcript = transcript  # Заменяем полностью, так как это полная транскрипция
+                            logger.info(f"[DEBUG] Получена транскрипция пользователя: '{transcript}'")
                         
-                        logger.info(f"[DEBUG] Получен текст ассистента: '{text_content}'")
-                        
-                        # Отправляем клиенту
-                        await websocket.send_json({
-                            "type": "response.content_part.added",
-                            "content": {
-                                "text": text_content
-                            }
-                        })
-                        
-                        # Если это завершающее сообщение, сохраняем в БД
-                        if msg_type == "text.complete":
+                        if is_final:
+                            logger.info(f"[DEBUG] Финальная транскрипция пользователя: '{user_transcript}'")
+                            
+                            # Сохраняем сообщение пользователя в БД
                             if openai_client.db_session and openai_client.conversation_record_id:
                                 try:
                                     conv = openai_client.db_session.query(Conversation).get(
                                         uuid.UUID(openai_client.conversation_record_id)
                                     )
                                     if conv:
-                                        conv.assistant_message = assistant_transcript
+                                        conv.user_message = user_transcript
                                         openai_client.db_session.commit()
-                                        logger.info(f"[DEBUG] Сохранен текст ассистента в БД")
+                                        logger.info(f"[DEBUG] Сохранено сообщение пользователя в БД")
                                 except Exception as e:
-                                    logger.error(f"[DEBUG] Ошибка сохранения ответа в БД: {str(e)}")
-                continue
-            
-            # Обработка аудио
-            if msg_type == "audio.chunk":
-                if "data" in response_data and "chunk" in response_data["data"]:
-                    audio_base64 = response_data["data"]["chunk"]
-                    audio_bytes = base64.b64decode(audio_base64)
-                    await websocket.send_bytes(audio_bytes)
-                continue
-            
-            # Обработка вызова функции
-            if msg_type == "tool_call" or msg_type == "function_call":
-                # Извлекаем данные вызова функции
-                if msg_type == "tool_call":
-                    function_call_id = response_data.get("data", {}).get("id")
-                    function_data = response_data.get("data", {})
-                    function_name = function_data.get("name")
-                    function_args = function_data.get("arguments", {})
-                else:
-                    function_call_id = response_data.get("function_call_id")
-                    function_data = response_data.get("function", {})
-                    function_name = function_data.get("name")
-                    function_args = function_data.get("arguments", {})
+                                    logger.error(f"[DEBUG] Ошибка сохранения в БД: {str(e)}")
+                        
+                        # Отправляем информацию клиенту в формате, который он ожидает
+                        await websocket.send_json({
+                            "type": "response.audio_transcript.delta",
+                            "delta": transcript,
+                            "index": 0,  # 0 для пользователя
+                            "is_final": is_final
+                        })
+                    continue
                 
-                logger.info(f"[DEBUG] Получен вызов функции: {function_name}, аргументы: {function_args}")
+                # Обработка событий текста от ассистента
+                if msg_type == "content" or msg_type == "content.text":
+                    if "data" in response_data:
+                        text_content = response_data["data"].get("text", "")
+                        
+                        if text_content:
+                            if not assistant_transcript:
+                                assistant_transcript = text_content
+                            else:
+                                assistant_transcript += text_content
+                            
+                            logger.info(f"[DEBUG] Получен текст ассистента: '{text_content}'")
+                            
+                            # Отправляем клиенту в формате, который он ожидает
+                            await websocket.send_json({
+                                "type": "response.content_part.added",
+                                "content": {
+                                    "text": text_content
+                                }
+                            })
+                            
+                            # Если это завершающее сообщение, сохраняем в БД
+                            if response_data["data"].get("final", False):
+                                if openai_client.db_session and openai_client.conversation_record_id:
+                                    try:
+                                        conv = openai_client.db_session.query(Conversation).get(
+                                            uuid.UUID(openai_client.conversation_record_id)
+                                        )
+                                        if conv:
+                                            conv.assistant_message = assistant_transcript
+                                            openai_client.db_session.commit()
+                                            logger.info(f"[DEBUG] Сохранен текст ассистента в БД")
+                                    except Exception as e:
+                                        logger.error(f"[DEBUG] Ошибка сохранения ответа в БД: {str(e)}")
+                    continue
                 
-                # Сообщаем клиенту о том, что выполняется функция
-                await websocket.send_json({
-                    "type": "function_call.start",
-                    "function": function_name,
-                    "function_call_id": function_call_id
-                })
+                # Обработка аудио
+                if msg_type == "audio":
+                    if "data" in response_data and "audio" in response_data["data"]:
+                        audio_base64 = response_data["data"]["audio"]
+                        audio_bytes = base64.b64decode(audio_base64)
+                        await websocket.send_bytes(audio_bytes)
+                    continue
                 
-                # Создаем объект для обработки функции
-                converted_data = {
-                    "function": {
-                        "name": function_name,
-                        "arguments": function_args
-                    },
-                    "function_call_id": function_call_id
+                # Обработка вызова функции
+                if msg_type == "tool" or msg_type == "tool_call":
+                    # Извлекаем данные вызова функции
+                    tool_data = response_data.get("data", {})
+                    function_call_id = tool_data.get("id")
+                    
+                    # Извлекаем имя функции и аргументы
+                    function_name = None
+                    function_args = {}
+                    
+                    for tool in tool_data.get("tools", []):
+                        if tool.get("type") == "function":
+                            function_data = tool.get("function", {})
+                            function_name = function_data.get("name")
+                            function_args = function_data.get("arguments", {})
+                            break
+                    
+                    if not function_name:
+                        logger.error(f"[DEBUG] Не удалось извлечь имя функции из данных: {tool_data}")
+                        continue
+                    
+                    logger.info(f"[DEBUG] Получен вызов функции: {function_name}, аргументы: {function_args}")
+                    
+                    # Сообщаем клиенту о том, что выполняется функция
+                    await websocket.send_json({
+                        "type": "function_call.start",
+                        "function": function_name,
+                        "function_call_id": function_call_id
+                    })
+                    
+                    # Создаем объект для обработки функции
+                    converted_data = {
+                        "function": {
+                            "name": function_name,
+                            "arguments": function_args
+                        },
+                        "function_call_id": function_call_id
+                    }
+                    
+                    # Выполняем функцию
+                    result = await openai_client.handle_function_call(converted_data)
+                    logger.info(f"[DEBUG] Результат выполнения функции: {result}")
+                    
+                    # Сохраняем результат для логирования
+                    function_result = result
+                    
+                    # Отправляем результат в OpenAI
+                    await openai_client.send_function_result(function_call_id, result)
+                    
+                    # Сообщаем клиенту о результате
+                    await websocket.send_json({
+                        "type": "function_call.completed",
+                        "function": function_name,
+                        "function_call_id": function_call_id,
+                        "result": result
+                    })
+                    
+                    continue
+                
+                # Завершение сессии
+                if msg_type == "done" or msg_type == "end":
+                    logger.info(f"[DEBUG] Получен сигнал завершения сессии: {msg_type}")
+                    
+                    # Отправляем клиенту сигнал завершения
+                    await websocket.send_json({
+                        "type": "response.done"
+                    })
+                    
+                    # Вызываем логику записи диалога
+                    await log_conversation(openai_client, user_transcript, assistant_transcript, function_result)
+                    
+                    continue
+                
+                # Преобразуем остальные сообщения в формат, ожидаемый клиентом
+                client_message = {
+                    "type": f"openai.{msg_type}",  # Префикс для отличия
+                    "data": response_data.get("data", {})
                 }
                 
-                # Выполняем функцию
-                result = await openai_client.handle_function_call(converted_data)
-                logger.info(f"[DEBUG] Результат выполнения функции: {result}")
+                # Отправляем клиенту
+                await websocket.send_json(client_message)
                 
-                # Сохраняем результат для логирования
-                function_result = result
-                
-                # Отправляем результат в OpenAI
-                await openai_client.send_function_result(function_call_id, result)
-                
-                # Сообщаем клиенту о результате
-                await websocket.send_json({
-                    "type": "function_call.completed",
-                    "function": function_name,
-                    "function_call_id": function_call_id,
-                    "result": result
-                })
-                
-                continue
-            
-            # Завершение сессии
-            if msg_type == "end":
-                logger.info(f"[DEBUG] Получен сигнал завершения сессии: end")
-                
-                # Отправляем клиенту сигнал завершения
-                await websocket.send_json({
-                    "type": "response.done"
-                })
-                
-                # Вызываем логику записи диалога
-                await log_conversation(openai_client, user_transcript, assistant_transcript, function_result)
-                
-                continue
-                
-            # Все остальные сообщения просто пересылаем клиенту
-            await websocket.send_json(response_data)
+            except (ConnectionClosed, asyncio.CancelledError):
+                logger.info(f"[DEBUG] Соединение закрыто для клиента {openai_client.client_id}")
+                return
+            except Exception as e:
+                logger.error(f"[DEBUG] Ошибка при обработке сообщения от OpenAI: {e}")
+                logger.error(f"[DEBUG] Трассировка: {traceback.format_exc()}")
 
-    except (ConnectionClosed, asyncio.CancelledError):
-        logger.info(f"[DEBUG] Соединение закрыто для клиента {openai_client.client_id}")
-        return
     except Exception as e:
         logger.error(f"[DEBUG] Ошибка в обработчике сообщений OpenAI: {e}")
         logger.error(f"[DEBUG] Трассировка: {traceback.format_exc()}")
