@@ -325,3 +325,5 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                         else:
                             if not assistant_transcript and delta_text:
                                 assistant_transcript = delta_text
+except Exception as e:
+    logger.error(f"Ошибка при обработке delta_text: {e}")
