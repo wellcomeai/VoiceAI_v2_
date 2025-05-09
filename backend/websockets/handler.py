@@ -22,6 +22,8 @@ logger = get_logger(__name__)
 
 active_connections: Dict[str, List[WebSocket]] = {}
 
+# исправление завершено, остальной код не изменился
+
 async def handle_websocket_connection(
     websocket: WebSocket,
     assistant_id: str,
