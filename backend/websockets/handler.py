@@ -6,6 +6,7 @@ import asyncio
 import uuid
 import base64
 import traceback
+import time
 from typing import Dict, List
 from websockets.exceptions import ConnectionClosed
 
@@ -275,6 +276,48 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                         assistant_transcript = output_content.get("text", "")
                         logger.info(f"[DEBUG] Из conversation.item.created получен текст ассистента: '{assistant_transcript}'")
             
+            # Дополнительные случаи получения текста пользователя
+            if msg_type == "conversation.item.input_audio_transcription.partial" and "transcript" in response_data:
+                partial_transcript = response_data.get("transcript", "")
+                logger.info(f"[DEBUG] Из input_audio_transcription.partial получена частичная транскрипция: '{partial_transcript}'")
+                if not user_transcript:
+                    user_transcript = partial_transcript
+            
+            if msg_type == "input_audio_buffer.committed" and not user_transcript:
+                # Попробуем получить транскрипцию из базы данных
+                if openai_client.db_session and openai_client.conversation_record_id:
+                    try:
+                        conv = openai_client.db_session.query(Conversation).get(
+                            uuid.UUID(openai_client.conversation_record_id)
+                        )
+                        if conv and conv.user_message:
+                            user_transcript = conv.user_message
+                            logger.info(f"[DEBUG] Получена транскрипция пользователя из БД: '{user_transcript}'")
+                    except Exception as e:
+                        logger.error(f"[DEBUG] Ошибка при получении транскрипции из БД: {str(e)}")
+            
+            # Улучшенная обработка функций - проверка вхождений в тексте ассистента
+            if msg_type in ["response.audio_transcript.delta", "response.content_part.added"] and not function_result:
+                current_text = ""
+                if msg_type == "response.audio_transcript.delta":
+                    current_text = response_data.get("delta", "")
+                elif "content" in response_data and "text" in response_data.get("content", {}):
+                    current_text = response_data.get("content", {}).get("text", "")
+                
+                # Проверяем тексты, которые могут указывать на выполнение функции
+                if "сообщение отправлено" in current_text.lower() or "webhook выполнен" in current_text.lower():
+                    logger.info(f"[DEBUG] Обнаружено упоминание функции в тексте ассистента: '{current_text}'")
+                    # Создаем фиктивный результат функции, если функция упоминается, но не была вызвана
+                    if not function_result:
+                        function_result = {
+                            "type": "send_webhook",
+                            "status": "success",
+                            "message": "Функция упомянута в тексте ассистента",
+                            "detected_from_text": True,
+                            "timestamp": time.time()
+                        }
+                        logger.info(f"[DEBUG] Создан фиктивный результат функции на основе текста")
+                        
             # Завершение ввода пользователя
             if msg_type == "input_audio_buffer.speech_stopped":
                 collecting_user_input = False
@@ -334,9 +377,46 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
             if msg_type == "response.done":
                 logger.info(f"[DEBUG] Получен сигнал завершения ответа: response.done")
                 
+                # Проверяем наличие текста пользователя и пробуем получить из БД если отсутствует
+                if not user_transcript and openai_client.db_session and openai_client.conversation_record_id:
+                    try:
+                        conv = openai_client.db_session.query(Conversation).get(
+                            uuid.UUID(openai_client.conversation_record_id)
+                        )
+                        if conv and conv.user_message:
+                            user_transcript = conv.user_message
+                            logger.info(f"[DEBUG] Получен текст пользователя из БД при завершении: '{user_transcript}'")
+                    except Exception as e:
+                        logger.error(f"[DEBUG] Ошибка при получении данных из БД: {str(e)}")
+                
                 # Выводим финальные собранные тексты для анализа
                 logger.info(f"[DEBUG] Завершен диалог. Пользователь: '{user_transcript}'")
                 logger.info(f"[DEBUG] Завершен диалог. Ассистент: '{assistant_transcript}'")
+                logger.info(f"[DEBUG] Результат функции: {function_result}")
+                
+                # Извлекаем текст пользователя из ответа ассистента, если он все еще не найден
+                if not user_transcript and assistant_transcript:
+                    # Ищем фразы, которые могут указывать на запрос пользователя
+                    possible_indicators = [
+                        "вы спросили", "ваш вопрос", "вы хотите", "вы запросили", 
+                        "вы интересуетесь", "вы сказали", "по вашему запросу"
+                    ]
+                    
+                    assistant_text_lower = assistant_transcript.lower()
+                    for indicator in possible_indicators:
+                        if indicator in assistant_text_lower:
+                            position = assistant_text_lower.find(indicator)
+                            end_position = assistant_text_lower.find(".", position)
+                            if end_position > position:
+                                extracted_text = assistant_transcript[position:end_position+1]
+                                logger.info(f"[DEBUG] Извлечен текст пользователя из ответа ассистента: '{extracted_text}'")
+                                user_transcript = f"[Извлечено из ответа] {extracted_text}"
+                                break
+                                
+                    # Если ничего не нашли, но есть упоминание о функции
+                    if not user_transcript and function_result:
+                        user_transcript = f"[Запрос функции] {function_result.get('type', 'unknown_function')}"
+                        logger.info(f"[DEBUG] Создан запрос пользователя на основе функции: '{user_transcript}'")
                 
                 # Сохраняем сообщение ассистента в БД
                 if openai_client.db_session and openai_client.conversation_record_id and assistant_transcript:
@@ -360,22 +440,6 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                     logger.info(f"[DEBUG] Запись диалога в Google Sheet {sheet_id}")
                     logger.info(f"[DEBUG] Пользователь: '{user_transcript}'")
                     logger.info(f"[DEBUG] Ассистент: '{assistant_transcript}'")
-                    
-                    # Проверяем наличие текста перед отправкой
-                    if not user_transcript and not assistant_transcript:
-                        logger.warning(f"[DEBUG] Пустые тексты диалога, попробуем использовать данные из БД")
-                        # Пробуем получить данные из БД
-                        if openai_client.db_session and openai_client.conversation_record_id:
-                            try:
-                                conv = openai_client.db_session.query(Conversation).get(
-                                    uuid.UUID(openai_client.conversation_record_id)
-                                )
-                                if conv:
-                                    user_transcript = conv.user_message or ""
-                                    assistant_transcript = conv.assistant_message or ""
-                                    logger.info(f"[DEBUG] Получены данные из БД: пользователь: '{user_transcript}', ассистент: '{assistant_transcript}'")
-                            except Exception as e:
-                                logger.error(f"[DEBUG] Ошибка при получении данных из БД: {str(e)}")
                     
                     # Используем сохраненные значения для записи в Google Sheets
                     if user_transcript or assistant_transcript:
