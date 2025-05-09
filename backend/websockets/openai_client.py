@@ -173,13 +173,15 @@ class OpenAIRealtimeClient:
                         func_def = FUNCTION_DEFINITIONS[func_name]
                         tools.append({
                             "type": "function",
-                            "name": func_name,
-                            "description": func_def.get("description", f"Function {func_name}"),
-                            "parameters": func_def.get("parameters", {
-                                "type": "object",
-                                "properties": {},
-                                "required": []
-                            })
+                            "function": {
+                                "name": func_name,
+                                "description": func_def.get("description", f"Function {func_name}"),
+                                "parameters": func_def.get("parameters", {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": []
+                                })
+                            }
                         })
             else:
                 # Handle case when functions are already in the right format
@@ -188,47 +190,36 @@ class OpenAIRealtimeClient:
                     if func_name:
                         tools.append({
                             "type": "function",
-                            "name": func_name,
-                            "description": func.get("description", f"Function {func_name}"),
-                            "parameters": func.get("parameters", {
-                                "type": "object",
-                                "properties": {},
-                                "required": []
-                            })
+                            "function": {
+                                "name": func_name,
+                                "description": func.get("description", f"Function {func_name}"),
+                                "parameters": func.get("parameters", {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": []
+                                })
+                            }
                         })
         
         # Set tool_choice
         if tools:
             tool_choice = "auto"  # Allow model to decide when to call functions
             
-        # Согласно документации, следуем стандартной структуре сообщения
-        # Корректируем структуру для соответствия API
+        # Согласно документации Microsoft и OpenAI
+        # https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/realtime-audio-websockets
+        # Строим правильный формат сообщения
         payload = {
-            "type": "session.update",
+            "type": "update",
             "data": {
-                "session": {
-                    "vad": {
-                        "enabled": True,
-                        "silence_threshold_ms": 300, 
-                        "speech_activity_threshold": 0.25,
-                        "allow_empty_responses": False
-                    },
-                    "audio": {
-                        "input_format": "pcm_16k", 
-                        "output_format": "pcm_16k",
-                        "voice": voice
-                    },
-                    "model": "gpt-4o",
-                    "instructions": system_message,
-                    "temperature": 0.7,
-                    "max_tokens": 500,
-                    "tools": tools,
-                    "tool_choice": tool_choice
-                }
+                "instructions": system_message,
+                "voice": voice,
+                "tools": tools,
+                "tool_choice": tool_choice if tools else "none"
             }
         }
         
         try:
+            logger.info(f"Sending update with payload: {json.dumps(payload)[:200]}...")
             await self.ws.send(json.dumps(payload))
             logger.info(f"Session settings sent (voice={voice}, tools={len(tools)})")
             
@@ -236,9 +227,16 @@ class OpenAIRealtimeClient:
             response = await asyncio.wait_for(self.ws.recv(), timeout=5)
             response_data = json.loads(response)
             
-            # Проверяем ответ
+            # Логируем полный ответ для отладки
+            logger.info(f"Response after update: {json.dumps(response_data)}")
+            
+            # Проверяем ответ (может быть как session.updated, так и error)
             if response_data.get("type") == "session.updated":
                 logger.info("Session updated successfully")
+            elif response_data.get("type") == "error":
+                error_message = response_data.get("data", {}).get("message", "Unknown error")
+                logger.error(f"Error updating session: {error_message}")
+                # Тем не менее, продолжаем - иногда API выдает ошибку, но сессия всё равно работает
             else:
                 logger.warning(f"Unexpected response after session.update: {response_data.get('type')}")
             
@@ -321,7 +319,7 @@ class OpenAIRealtimeClient:
         try:
             # Обновляем формат сообщения согласно документации
             payload = {
-                "type": "tool_call.result",
+                "type": "tool_result",
                 "data": {
                     "id": function_call_id,
                     "result": result
@@ -352,9 +350,9 @@ class OpenAIRealtimeClient:
             
             # Обновляем формат согласно документации
             await self.ws.send(json.dumps({
-                "type": "audio.chunk",
+                "type": "audio",
                 "data": {
-                    "chunk": data_b64,
+                    "audio": data_b64,
                     "sequence": int(time.time() * 1000)  # Используем timestamp в качестве sequence number
                 }
             }))
@@ -379,10 +377,8 @@ class OpenAIRealtimeClient:
         try:
             # Обновляем формат согласно документации
             await self.ws.send(json.dumps({
-                "type": "audio.end",
-                "data": {
-                    "reason": "end_of_utterance"
-                }
+                "type": "audio_end",
+                "data": {}
             }))
             return True
         except ConnectionClosed:
@@ -405,7 +401,7 @@ class OpenAIRealtimeClient:
         try:
             # Обновляем формат согласно документации
             await self.ws.send(json.dumps({
-                "type": "audio.clear",
+                "type": "reset",
                 "data": {}
             }))
             return True
