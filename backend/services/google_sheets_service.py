@@ -24,11 +24,18 @@ try:
     GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
     if GOOGLE_SERVICE_ACCOUNT_JSON:
         SERVICE_ACCOUNT_INFO = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+        
+        # Исправление формата private_key - замена \\n на реальные переносы строк
+        if "private_key" in SERVICE_ACCOUNT_INFO:
+            # Удаляем экранирование обратных слешей в приватном ключе
+            SERVICE_ACCOUNT_INFO["private_key"] = SERVICE_ACCOUNT_INFO["private_key"].replace('\\n', '\n')
+            logger.info("Формат приватного ключа скорректирован")
     else:
         logger.error("Переменная окружения GOOGLE_SERVICE_ACCOUNT_JSON не найдена")
         SERVICE_ACCOUNT_INFO = {}
 except json.JSONDecodeError as e:
     logger.error(f"Ошибка декодирования JSON из переменной окружения: {str(e)}")
+    logger.error(f"Первые 100 символов переменной: {GOOGLE_SERVICE_ACCOUNT_JSON[:100] if GOOGLE_SERVICE_ACCOUNT_JSON else 'None'}")
     SERVICE_ACCOUNT_INFO = {}
 except Exception as e:
     logger.error(f"Непредвиденная ошибка при загрузке данных сервисного аккаунта: {str(e)}")
@@ -56,15 +63,30 @@ class GoogleSheetsService:
             # Проверка наличия данных сервисного аккаунта
             if not SERVICE_ACCOUNT_INFO or "private_key" not in SERVICE_ACCOUNT_INFO:
                 logger.error("Отсутствуют необходимые данные сервисного аккаунта")
+                if SERVICE_ACCOUNT_INFO:
+                    logger.error(f"Доступные ключи: {', '.join(SERVICE_ACCOUNT_INFO.keys())}")
                 raise ValueError("Отсутствуют данные сервисного аккаунта. Проверьте переменную GOOGLE_SERVICE_ACCOUNT_JSON")
             
-            # Создаем учетные данные из загруженного ключа
-            credentials = service_account.Credentials.from_service_account_info(
-                SERVICE_ACCOUNT_INFO,
-                scopes=['https://www.googleapis.com/auth/spreadsheets']
-            )
+            # Логируем информацию о ключе для отладки (без приватного ключа)
+            safe_info = {k: v for k, v in SERVICE_ACCOUNT_INFO.items() if k != "private_key"}
+            safe_info["private_key"] = "[HIDDEN]"
+            logger.info(f"Данные сервисного аккаунта: {json.dumps(safe_info)}")
             
-            logger.info(f"Учетные данные созданы для: {credentials.service_account_email}")
+            # Создаем учетные данные из загруженного ключа
+            try:
+                credentials = service_account.Credentials.from_service_account_info(
+                    SERVICE_ACCOUNT_INFO,
+                    scopes=['https://www.googleapis.com/auth/spreadsheets']
+                )
+                logger.info(f"Учетные данные созданы для: {credentials.service_account_email}")
+            except Exception as e:
+                logger.error(f"Ошибка создания учетных данных: {str(e)}")
+                # Попробуем вывести дополнительную информацию о ключе для отладки
+                key_start = SERVICE_ACCOUNT_INFO.get("private_key", "")[:50]
+                key_end = SERVICE_ACCOUNT_INFO.get("private_key", "")[-50:] if SERVICE_ACCOUNT_INFO.get("private_key", "") else ""
+                logger.error(f"Начало приватного ключа: {key_start}...")
+                logger.error(f"Конец приватного ключа: ...{key_end}")
+                raise
             
             # Получаем токен
             request = google.auth.transport.requests.Request()
