@@ -49,6 +49,8 @@ class OpenAIRealtimeClient:
         self.openai_url = settings.REALTIME_WS_URL
         self.session_id = str(uuid.uuid4())
         self.conversation_record_id: Optional[str] = None
+        self.audio_buffer_size = 0
+        self.response_in_progress = False
 
     async def connect(self) -> bool:
         """
@@ -290,20 +292,23 @@ class OpenAIRealtimeClient:
             logger.error(f"Error sending function result: {e}")
             return False
 
-    async def process_audio(self, audio_buffer: bytes) -> bool:
+    async def process_audio(self, audio_chunk: bytes) -> bool:
         """
         Process and send audio data to the OpenAI API.
         
         Args:
-            audio_buffer: Binary audio data in PCM16 format
+            audio_chunk: Binary audio data in PCM16 format
             
         Returns:
             bool: True if successful, False otherwise
         """
-        if not self.is_connected or not self.ws or not audio_buffer:
+        if not self.is_connected or not self.ws or not audio_chunk:
             return False
         try:
-            data_b64 = base64.b64encode(audio_buffer).decode("utf-8")
+            # Отслеживаем размер буфера
+            self.audio_buffer_size += len(audio_chunk)
+            
+            data_b64 = base64.b64encode(audio_chunk).decode("utf-8")
             await self.ws.send(json.dumps({
                 "type": "input_audio_buffer.append",
                 "audio": data_b64,
@@ -327,12 +332,21 @@ class OpenAIRealtimeClient:
         """
         if not self.is_connected or not self.ws:
             return False
+            
+        # Проверка размера буфера: 16-битный PCM, 16KHz
+        # 2000 байт ~ 100мс (минимальное требование OpenAI)
+        if self.audio_buffer_size < 2000:
+            logger.warning(f"Audio buffer too small to commit ({self.audio_buffer_size} bytes, need at least 2000 bytes) for session: {self.session_id}")
+            return False
+            
         try:
             await self.ws.send(json.dumps({
                 "type": "input_audio_buffer.commit",
                 "event_id": f"commit_{time.time()}"
             }))
-            logger.info(f"Audio buffer committed for session: {self.session_id}")
+            logger.info(f"Audio buffer committed ({self.audio_buffer_size} bytes) for session: {self.session_id}")
+            # Сбрасываем счетчик размера буфера
+            self.audio_buffer_size = 0
             return True
         except ConnectionClosed:
             logger.error(f"Connection closed while committing audio for session: {self.session_id}")
@@ -356,6 +370,9 @@ class OpenAIRealtimeClient:
                 "type": "input_audio_buffer.clear",
                 "event_id": f"clear_{time.time()}"
             }))
+            # Сбрасываем счетчик размера буфера
+            self.audio_buffer_size = 0
+            logger.info(f"Audio buffer cleared for session: {self.session_id}")
             return True
         except ConnectionClosed:
             logger.error(f"Connection closed while clearing audio buffer for session: {self.session_id}")
@@ -363,6 +380,35 @@ class OpenAIRealtimeClient:
             return False
         except Exception as e:
             logger.error(f"Error clearing audio buffer: {e}")
+            return False
+
+    async def cancel_response(self) -> bool:
+        """
+        Cancel the current response if it is in progress.
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not self.is_connected or not self.ws:
+            return False
+            
+        if not self.response_in_progress:
+            logger.warning(f"No active response to cancel for session: {self.session_id}")
+            return False
+            
+        try:
+            await self.ws.send(json.dumps({
+                "type": "response.cancel",
+                "event_id": f"cancel_{time.time()}"
+            }))
+            logger.info(f"Response cancellation requested for session: {self.session_id}")
+            return True
+        except ConnectionClosed:
+            logger.error(f"Connection closed while cancelling response for session: {self.session_id}")
+            self.is_connected = False
+            return False
+        except Exception as e:
+            logger.error(f"Error cancelling response: {e}")
             return False
 
     async def close(self) -> None:
