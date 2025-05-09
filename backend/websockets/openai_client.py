@@ -53,8 +53,7 @@ class OpenAIRealtimeClient:
     async def connect(self) -> bool:
         """
         Establish WebSocket connection to OpenAI Realtime API
-        and immediately send up-to-date session settings,
-        including the system_prompt from the database.
+        and start a session with necessary capabilities.
         
         Returns:
             bool: True if connection was successful, False otherwise
@@ -82,6 +81,33 @@ class OpenAIRealtimeClient:
             )
             self.is_connected = True
             logger.info(f"Connected to OpenAI for client {self.client_id}")
+
+            # Отправка сообщения "start" для инициализации сессии
+            start_message = {
+                "type": "start",
+                "data": {
+                    "capabilities": ["audio", "text", "voice_transcription"]
+                }
+            }
+            
+            try:
+                await self.ws.send(json.dumps(start_message))
+                logger.info("Start message with capabilities sent")
+                
+                # Ожидаем ответ от сервера
+                response = await asyncio.wait_for(self.ws.recv(), timeout=5)
+                response_data = json.loads(response)
+                
+                # Проверяем ответ - должно быть "session.created" или "session.initialized"
+                if response_data.get("type") in ["session.created", "session.initialized"]:
+                    logger.info(f"Session started successfully: {response_data.get('type')}")
+                else:
+                    logger.warning(f"Unexpected response after start: {response_data.get('type')}")
+                    
+            except Exception as e:
+                logger.error(f"Error sending start message: {e}")
+                await self.close()
+                return False
 
             # Fetch fresh settings from assistant_config
             voice = self.assistant_config.voice or DEFAULT_VOICE
@@ -127,13 +153,6 @@ class OpenAIRealtimeClient:
             logger.error("Cannot update session: not connected")
             return False
             
-        turn_detection = {
-            "type": "server_vad",
-            "threshold": 0.25,
-            "prefix_padding_ms": 200,
-            "silence_duration_ms": 300,
-            "create_response": True,
-        }
         tools = []
         tool_choice = "none"
         
@@ -182,47 +201,68 @@ class OpenAIRealtimeClient:
         if tools:
             tool_choice = "auto"  # Allow model to decide when to call functions
             
+        # Согласно документации, следуем стандартной структуре сообщения
+        # Корректируем структуру для соответствия API
         payload = {
             "type": "session.update",
-            "session": {
-                "turn_detection": turn_detection,
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
-                "voice": voice,
-                "instructions": system_message,
-                "modalities": ["text", "audio"],
-                "capabilities": ["voice_transcription", "text", "audio"],  # Явно включаем voice_transcription
-                "temperature": 0.7,
-                "max_response_output_tokens": 500,
-                "tools": tools,
-                "tool_choice": tool_choice
+            "data": {
+                "session": {
+                    "vad": {
+                        "enabled": True,
+                        "silence_threshold_ms": 300, 
+                        "speech_activity_threshold": 0.25,
+                        "allow_empty_responses": False
+                    },
+                    "audio": {
+                        "input_format": "pcm_16k", 
+                        "output_format": "pcm_16k",
+                        "voice": voice
+                    },
+                    "model": "gpt-4o",
+                    "instructions": system_message,
+                    "temperature": 0.7,
+                    "max_tokens": 500,
+                    "tools": tools,
+                    "tool_choice": tool_choice
+                }
             }
         }
+        
         try:
             await self.ws.send(json.dumps(payload))
             logger.info(f"Session settings sent (voice={voice}, tools={len(tools)})")
+            
+            # Ожидаем ответ от сервера
+            response = await asyncio.wait_for(self.ws.recv(), timeout=5)
+            response_data = json.loads(response)
+            
+            # Проверяем ответ
+            if response_data.get("type") == "session.updated":
+                logger.info("Session updated successfully")
+            else:
+                logger.warning(f"Unexpected response after session.update: {response_data.get('type')}")
+            
+            # Create a conversation record in the database if available
+            if self.db_session:
+                try:
+                    conv = Conversation(
+                        assistant_id=self.assistant_config.id,
+                        session_id=self.session_id,
+                        user_message="",
+                        assistant_message="",
+                    )
+                    self.db_session.add(conv)
+                    self.db_session.commit()
+                    self.db_session.refresh(conv)
+                    self.conversation_record_id = str(conv.id)
+                    logger.info(f"Created conversation record: {self.conversation_record_id}")
+                except Exception as e:
+                    logger.error(f"Error creating Conversation in DB: {e}")
+
+            return True
         except Exception as e:
             logger.error(f"Error sending session.update: {e}")
             return False
-
-        # Create a conversation record in the database if available
-        if self.db_session:
-            try:
-                conv = Conversation(
-                    assistant_id=self.assistant_config.id,
-                    session_id=self.session_id,
-                    user_message="",
-                    assistant_message="",
-                )
-                self.db_session.add(conv)
-                self.db_session.commit()
-                self.db_session.refresh(conv)
-                self.conversation_record_id = str(conv.id)
-                logger.info(f"Created conversation record: {self.conversation_record_id}")
-            except Exception as e:
-                logger.error(f"Error creating Conversation in DB: {e}")
-
-        return True
 
     async def handle_function_call(self, function_call_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -279,10 +319,13 @@ class OpenAIRealtimeClient:
             return False
         
         try:
+            # Обновляем формат сообщения согласно документации
             payload = {
-                "type": "function_call_output",
-                "function_call_id": function_call_id,
-                "content": result
+                "type": "tool_call.result",
+                "data": {
+                    "id": function_call_id,
+                    "result": result
+                }
             }
             
             await self.ws.send(json.dumps(payload))
@@ -306,10 +349,14 @@ class OpenAIRealtimeClient:
             return False
         try:
             data_b64 = base64.b64encode(audio_buffer).decode("utf-8")
+            
+            # Обновляем формат согласно документации
             await self.ws.send(json.dumps({
-                "type": "input_audio_buffer.append",
-                "audio": data_b64,
-                "event_id": f"audio_{time.time()}"
+                "type": "audio.chunk",
+                "data": {
+                    "chunk": data_b64,
+                    "sequence": int(time.time() * 1000)  # Используем timestamp в качестве sequence number
+                }
             }))
             return True
         except ConnectionClosed:
@@ -330,9 +377,12 @@ class OpenAIRealtimeClient:
         if not self.is_connected or not self.ws:
             return False
         try:
+            # Обновляем формат согласно документации
             await self.ws.send(json.dumps({
-                "type": "input_audio_buffer.commit",
-                "event_id": f"commit_{time.time()}"
+                "type": "audio.end",
+                "data": {
+                    "reason": "end_of_utterance"
+                }
             }))
             return True
         except ConnectionClosed:
@@ -353,9 +403,10 @@ class OpenAIRealtimeClient:
         if not self.is_connected or not self.ws:
             return False
         try:
+            # Обновляем формат согласно документации
             await self.ws.send(json.dumps({
-                "type": "input_audio_buffer.clear",
-                "event_id": f"clear_{time.time()}"
+                "type": "audio.clear",
+                "data": {}
             }))
             return True
         except ConnectionClosed:
@@ -372,6 +423,11 @@ class OpenAIRealtimeClient:
         """
         if self.ws:
             try:
+                # Отправляем сообщение о завершении сессии
+                await self.ws.send(json.dumps({
+                    "type": "end",
+                    "data": {}
+                }))
                 await self.ws.close()
                 logger.info(f"WebSocket connection closed for client {self.client_id}")
             except Exception as e:
