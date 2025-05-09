@@ -187,7 +187,7 @@ class OpenAIRealtimeClient:
     # Остальная логика оставлена без изменений
 
                 # Handle case when functions are already in the right format
-                for func in functions:
+for func in functions:
                     func_name = func.get("name")
                     if func_name:
                         tools.append({
