@@ -17,6 +17,7 @@ logger = get_logger(__name__)
 
 DEFAULT_VOICE = "alloy"
 DEFAULT_SYSTEM_MESSAGE = "You are a helpful voice assistant."
+MIN_AUDIO_LENGTH_BYTES = 1600  # примерно 100мс аудио при 16kHz, mono, 16-bit
 
 class OpenAIRealtimeClient:
     """
@@ -51,6 +52,11 @@ class OpenAIRealtimeClient:
         self.conversation_record_id: Optional[str] = None
         self.audio_buffer_size = 0
         self.response_in_progress = False
+        self.session_ended = False
+        
+        # Буфер для хранения транскрипции
+        self.user_transcript = ""
+        self.assistant_transcript = ""
 
     async def connect(self) -> bool:
         """
@@ -302,11 +308,17 @@ class OpenAIRealtimeClient:
         Returns:
             bool: True if successful, False otherwise
         """
-        if not self.is_connected or not self.ws or not audio_chunk:
+        if not self.is_connected or not self.ws or not audio_chunk or self.session_ended:
+            if self.session_ended:
+                logger.warning(f"Ignoring audio chunk for ended session: {self.session_id}")
             return False
+            
         try:
             # Отслеживаем размер буфера
-            self.audio_buffer_size += len(audio_chunk)
+            chunk_size = len(audio_chunk)
+            self.audio_buffer_size += chunk_size
+            
+            logger.debug(f"Adding {chunk_size} bytes to audio buffer, total: {self.audio_buffer_size} bytes, session: {self.session_id}")
             
             data_b64 = base64.b64encode(audio_chunk).decode("utf-8")
             await self.ws.send(json.dumps({
@@ -331,12 +343,17 @@ class OpenAIRealtimeClient:
             bool: True if successful, False otherwise
         """
         if not self.is_connected or not self.ws:
+            logger.warning(f"Cannot commit audio: not connected, session: {self.session_id}")
+            return False
+            
+        if self.session_ended:
+            logger.warning(f"Cannot commit audio: session already ended, session: {self.session_id}")
             return False
             
         # Проверка размера буфера: 16-битный PCM, 16KHz
-        # 2000 байт ~ 100мс (минимальное требование OpenAI)
-        if self.audio_buffer_size < 2000:
-            logger.warning(f"Audio buffer too small to commit ({self.audio_buffer_size} bytes, need at least 2000 bytes) for session: {self.session_id}")
+        # 1600 байт ~ 100мс (минимальное требование OpenAI)
+        if self.audio_buffer_size < MIN_AUDIO_LENGTH_BYTES:
+            logger.warning(f"Audio buffer too small to commit ({self.audio_buffer_size} bytes, need at least {MIN_AUDIO_LENGTH_BYTES} bytes) for session: {self.session_id}")
             return False
             
         try:
@@ -365,6 +382,11 @@ class OpenAIRealtimeClient:
         """
         if not self.is_connected or not self.ws:
             return False
+            
+        if self.session_ended:
+            logger.warning(f"Cannot clear audio buffer: session already ended, session: {self.session_id}")
+            return False
+            
         try:
             await self.ws.send(json.dumps({
                 "type": "input_audio_buffer.clear",
@@ -392,6 +414,10 @@ class OpenAIRealtimeClient:
         if not self.is_connected or not self.ws:
             return False
             
+        if self.session_ended:
+            logger.warning(f"Cannot cancel response: session already ended, session: {self.session_id}")
+            return False
+            
         if not self.response_in_progress:
             logger.warning(f"No active response to cancel for session: {self.session_id}")
             return False
@@ -410,11 +436,19 @@ class OpenAIRealtimeClient:
         except Exception as e:
             logger.error(f"Error cancelling response: {e}")
             return False
+            
+    def end_session(self):
+        """
+        Mark the session as ended to prevent further operations.
+        """
+        self.session_ended = True
+        logger.info(f"Session marked as ended: {self.session_id}")
 
     async def close(self) -> None:
         """
         Close the WebSocket connection.
         """
+        self.end_session()
         if self.ws:
             try:
                 await self.ws.close()
@@ -422,3 +456,19 @@ class OpenAIRealtimeClient:
             except Exception as e:
                 logger.error(f"Error closing OpenAI WebSocket: {e}")
         self.is_connected = False
+        
+    def update_transcript(self, user_text: str = None, assistant_text: str = None):
+        """
+        Update transcript buffers with new text.
+        
+        Args:
+            user_text: Text from user to add
+            assistant_text: Text from assistant to add
+        """
+        if user_text:
+            self.user_transcript = user_text
+            logger.debug(f"Updated user transcript: '{self.user_transcript}', session: {self.session_id}")
+            
+        if assistant_text:
+            self.assistant_transcript = assistant_text
+            logger.debug(f"Updated assistant transcript: '{self.assistant_transcript}', session: {self.session_id}")
