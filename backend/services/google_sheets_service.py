@@ -1,6 +1,6 @@
 """
-Упрощенный Google Sheets service для WellcomeAI application.
-Использует новый сервисный аккаунт для решения проблемы JWT подписи.
+Google Sheets service для WellcomeAI application.
+Использует сервисный аккаунт из переменной окружения GOOGLE_SERVICE_ACCOUNT_JSON.
 """
 
 import os
@@ -19,23 +19,23 @@ from backend.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Информация о новом сервисном аккаунте
-SERVICE_ACCOUNT_INFO = {
-  "type": "service_account",
-  "project_id": "voiceai-459216",
-  "private_key_id": "54a1f4f55b73e929bcdb1c05d7c2bafc7a00bec8",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQClahqkLdaWwPAh\n9DuMph7ogtxPLzuZYvlpvfrqZsjOviXK+pDAZZkeIMSMprjVRxQ2BiO43qYWfGrX\n+9J2d6SPDHIw3qzr3NQExujHcTeTv5RGOnLU32hbfAM+5rzctRlae24IE0+GQlY7\nzc+ZN2pGtzGlzfjwT+yO2bJY1AbTBx0Q5cB95bEkpn4aub3fqAT+aBiy2c08m7DG\nrOTTQDOxIWN3FCBON/WlDiH5w0AH7KT3FXUGQ0ZVIs6bbZ0xV1kd1OKedg8ltJD+\nauSiPQXzcqt7DqKC62RyFq/3p2h3Uzh+6Yy3L8leWb2sl1xMykRL04X3arZxUbte\nmC2f8pV/AgMBAAECggEAEVVeiFDDWVXLdAtnSBRKTdwUoPmWmbqs3x9I0VJG/Z8g\nT7ZU/8xFsMoHPqPj33mMzSJ0kNVH+zg7a/mX8tETvee0eZmD7k1cLEn5r5iWFdXw\nADH0wYjNozSKFIfSR6B0kS44+ACqBywhZC/rbqdHbDSbL8A3M1t0sv1t+m/xbSB4\n+OTeQ4pDwS6U1f580nd5KzxrZT/6IZ+pPKLV+wt7JzWsiO1why850Qjgv2jdvhut\nQb87cVwA09Le/wDU7lcN6WjCwCcB5idCus9cfFaKVIWn4VR9oMf5HbEPH8aVPVA/\ncQyTsVN5VHIG8bnqG9cz7/YRI5L7HzoLniHDLVjSPQKBgQDcc/95Yw+LYU7LfkDd\nfqslDXheC6c3Sox6QbvA9Dor0RSb0NUGx3QZ2kf5x/QIiSWA89RNmSNsukhUw7eG\nCvuwoRTC3uXk7/g0AoY4zJRYRfE6+BnT8goYfVmZ9yJU64cTjGx5QYx4oCZh+1UD\nACGmqMva348AX7McjgAczfTMswKBgQDAFi+wYOqQeHWJjDnZDj2LnNrUl3PrC5VS\ngNa5mUxdeYtmnQ8DlZK+/GHtXFaZ7RouJ6frcbFfYUWK07XehQYKxQFtaxCs7zho\nKhhAadWI+efJh5VcUgIykHAwt5kmQ1TUZi1ZnlaX7SzNMQgNv39gg9j5oXF7peH8\nWtvl/CISBQKBgQCCQZvK2mg936ISBKhI92YiP4JGdzY3Kjo0ppBMY0HXz/MQWeT0\n23bTK7FpeebMAFUDi45+xyQyQyMnyniun+C1LYg52EAX9F5ARNmPx/lC6xis0hlY\nrOOgMrh1i5tid8PZHhid0MgyIdZsAHfrjPFVKtlAmuVAwErxbUnNuzeQlwKBgDkg\noBBB0qEi4joFNVMjlBRIkyB05qm56S//V10dhYOrWVUsUsHLIzif0PQJ6UugI5Ak\nhSFVz93BDTCrpERIpbJgQvtqwyvbfZglJM9LapFxWYkrRLWPQk4NfQBQKkEh90Gw\nHb6wg6pthEyGT5HfKR/oNoiPhjOy8xHdZ9bvdKaNAoGAKRztrf5Ge35FjYnTiFv6\njS4Kr8NEFkJm8G1oHvIp1FFHbAUL2BfOVR5YEiruJEKHoqKYFMM+Ua6aT8qnUvUc\nsQyTIN0UyJKty9YTTz6y7kOd2oTlnmFx32WGLA9T/Y1RJUJw90xDQ80cuz2FwEnp\nD6Uv34IkbslZChbWJIzxgW4=\n-----END PRIVATE KEY-----\n",
-  "client_email": "well-397@voiceai-459216.iam.gserviceaccount.com",
-  "client_id": "103973116392963684000",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/well-397%40voiceai-459216.iam.gserviceaccount.com",
-  "universe_domain": "googleapis.com"
-}
+# Загрузка информации о сервисном аккаунте из переменной окружения
+try:
+    GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if GOOGLE_SERVICE_ACCOUNT_JSON:
+        SERVICE_ACCOUNT_INFO = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+    else:
+        logger.error("Переменная окружения GOOGLE_SERVICE_ACCOUNT_JSON не найдена")
+        SERVICE_ACCOUNT_INFO = {}
+except json.JSONDecodeError as e:
+    logger.error(f"Ошибка декодирования JSON из переменной окружения: {str(e)}")
+    SERVICE_ACCOUNT_INFO = {}
+except Exception as e:
+    logger.error(f"Непредвиденная ошибка при загрузке данных сервисного аккаунта: {str(e)}")
+    SERVICE_ACCOUNT_INFO = {}
 
 class GoogleSheetsService:
-    """Упрощенный сервис для работы с Google Sheets"""
+    """Сервис для работы с Google Sheets"""
     
     _service = None
     
@@ -51,9 +51,14 @@ class GoogleSheetsService:
             return cls._service
             
         try:
-            logger.info("Инициализация Google Sheets сервиса с новым аккаунтом...")
+            logger.info("Инициализация Google Sheets сервиса...")
             
-            # Создаем учетные данные из встроенного ключа
+            # Проверка наличия данных сервисного аккаунта
+            if not SERVICE_ACCOUNT_INFO or "private_key" not in SERVICE_ACCOUNT_INFO:
+                logger.error("Отсутствуют необходимые данные сервисного аккаунта")
+                raise ValueError("Отсутствуют данные сервисного аккаунта. Проверьте переменную GOOGLE_SERVICE_ACCOUNT_JSON")
+            
+            # Создаем учетные данные из загруженного ключа
             credentials = service_account.Credentials.from_service_account_info(
                 SERVICE_ACCOUNT_INFO,
                 scopes=['https://www.googleapis.com/auth/spreadsheets']
