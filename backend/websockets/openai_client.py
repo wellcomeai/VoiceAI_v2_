@@ -81,12 +81,29 @@ class OpenAIRealtimeClient:
                 timeout=30
             )
             self.is_connected = True
-            logger.info(f"Connected to OpenAI for client {self.client_id}")
+            logger.info(f"Connected to OpenAI for client {self.client_id}, session: {self.session_id}")
 
             # Fetch fresh settings from assistant_config
             voice = self.assistant_config.voice or DEFAULT_VOICE
             system_message = getattr(self.assistant_config, "system_prompt", None) or DEFAULT_SYSTEM_MESSAGE
             functions = getattr(self.assistant_config, "functions", None)
+
+            # Create a conversation record in the database if available
+            if self.db_session:
+                try:
+                    conv = Conversation(
+                        assistant_id=self.assistant_config.id,
+                        session_id=self.session_id,
+                        user_message="",
+                        assistant_message="",
+                    )
+                    self.db_session.add(conv)
+                    self.db_session.commit()
+                    self.db_session.refresh(conv)
+                    self.conversation_record_id = str(conv.id)
+                    logger.info(f"Created conversation record: {self.conversation_record_id} for session: {self.session_id}")
+                except Exception as e:
+                    logger.error(f"Error creating Conversation in DB: {e}")
 
             # Send updated session settings with actual system_prompt
             if not await self.update_session(
@@ -94,7 +111,7 @@ class OpenAIRealtimeClient:
                 system_message=system_message,
                 functions=functions
             ):
-                logger.error("Failed to update session settings")
+                logger.error(f"Failed to update session settings for session: {self.session_id}")
                 await self.close()
                 return False
 
@@ -199,29 +216,11 @@ class OpenAIRealtimeClient:
         }
         try:
             await self.ws.send(json.dumps(payload))
-            logger.info(f"Session settings sent (voice={voice}, tools={len(tools)})")
+            logger.info(f"Session settings sent for session: {self.session_id} (voice={voice}, tools={len(tools)})")
+            return True
         except Exception as e:
             logger.error(f"Error sending session.update: {e}")
             return False
-
-        # Create a conversation record in the database if available
-        if self.db_session:
-            try:
-                conv = Conversation(
-                    assistant_id=self.assistant_config.id,
-                    session_id=self.session_id,
-                    user_message="",
-                    assistant_message="",
-                )
-                self.db_session.add(conv)
-                self.db_session.commit()
-                self.db_session.refresh(conv)
-                self.conversation_record_id = str(conv.id)
-                logger.info(f"Created conversation record: {self.conversation_record_id}")
-            except Exception as e:
-                logger.error(f"Error creating Conversation in DB: {e}")
-
-        return True
 
     async def handle_function_call(self, function_call_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -247,7 +246,7 @@ class OpenAIRealtimeClient:
                     logger.warning(f"Failed to parse function arguments as JSON: {arguments}")
                     arguments = {}
             
-            logger.info(f"Processing function call: {function_name} with arguments: {arguments}")
+            logger.info(f"Processing function call: {function_name} with arguments: {arguments} for session: {self.session_id}")
             
             # Execute the function
             result = await execute_function(
@@ -285,7 +284,7 @@ class OpenAIRealtimeClient:
             }
             
             await self.ws.send(json.dumps(payload))
-            logger.info(f"Function result sent: {function_call_id}")
+            logger.info(f"Function result sent: {function_call_id} for session: {self.session_id}")
             return True
         except Exception as e:
             logger.error(f"Error sending function result: {e}")
@@ -312,7 +311,7 @@ class OpenAIRealtimeClient:
             }))
             return True
         except ConnectionClosed:
-            logger.error("Connection closed while sending audio data")
+            logger.error(f"Connection closed while sending audio data for session: {self.session_id}")
             self.is_connected = False
             return False
         except Exception as e:
@@ -333,9 +332,10 @@ class OpenAIRealtimeClient:
                 "type": "input_audio_buffer.commit",
                 "event_id": f"commit_{time.time()}"
             }))
+            logger.info(f"Audio buffer committed for session: {self.session_id}")
             return True
         except ConnectionClosed:
-            logger.error("Connection closed while committing audio")
+            logger.error(f"Connection closed while committing audio for session: {self.session_id}")
             self.is_connected = False
             return False
         except Exception as e:
@@ -358,7 +358,7 @@ class OpenAIRealtimeClient:
             }))
             return True
         except ConnectionClosed:
-            logger.error("Connection closed while clearing audio buffer")
+            logger.error(f"Connection closed while clearing audio buffer for session: {self.session_id}")
             self.is_connected = False
             return False
         except Exception as e:
@@ -372,31 +372,7 @@ class OpenAIRealtimeClient:
         if self.ws:
             try:
                 await self.ws.close()
-                logger.info(f"WebSocket connection closed for client {self.client_id}")
+                logger.info(f"WebSocket connection closed for client {self.client_id}, session: {self.session_id}")
             except Exception as e:
                 logger.error(f"Error closing OpenAI WebSocket: {e}")
         self.is_connected = False
-
-    async def receive_messages(self) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Receive and yield messages from the OpenAI WebSocket.
-        
-        Yields:
-            Dict: Message received from the OpenAI WebSocket
-        """
-        if not self.is_connected or not self.ws:
-            return
-            
-        try:
-            async for message in self.ws:
-                try:
-                    data = json.loads(message)
-                    yield data
-                except json.JSONDecodeError:
-                    logger.error(f"Failed to decode message: {message[:100]}...")
-        except ConnectionClosed:
-            logger.info(f"WebSocket connection closed for client {self.client_id}")
-            self.is_connected = False
-        except Exception as e:
-            logger.error(f"Error receiving messages: {e}")
-            self.is_connected = False
