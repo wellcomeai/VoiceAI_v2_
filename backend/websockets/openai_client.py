@@ -191,6 +191,7 @@ class OpenAIRealtimeClient:
                 "voice": voice,
                 "instructions": system_message,
                 "modalities": ["text", "audio"],
+                "capabilities": ["voice_transcription", "text", "audio"],  # Явно включаем voice_transcription
                 "temperature": 0.7,
                 "max_response_output_tokens": 500,
                 "tools": tools,
