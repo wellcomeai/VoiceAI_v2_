@@ -128,10 +128,14 @@ class GoogleSheetsService:
             return False
         
         try:
-            # Проверка входных данных
+            # Изменено: разрешаем запись, если хотя бы одно из сообщений есть
             if not user_message and not assistant_message:
                 logger.warning("[DEBUG-SHEETS] Пустые сообщения, запись пропущена")
                 return False
+            
+            # Установка значений по умолчанию, если нет данных
+            user_message = user_message or "(пустое сообщение)"
+            assistant_message = assistant_message or "(пустой ответ)"
             
             logger.info(f"[DEBUG-SHEETS] Подготовка записи диалога в таблицу: {sheet_id}")
             logger.info(f"[DEBUG-SHEETS] Сообщение пользователя ({len(user_message)} символов): '{user_message[:50]}...'")
