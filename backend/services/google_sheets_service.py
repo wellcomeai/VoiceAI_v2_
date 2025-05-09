@@ -7,6 +7,7 @@ import os
 import json
 import asyncio
 import time
+import traceback
 import google.auth.transport.requests
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -123,10 +124,19 @@ class GoogleSheetsService:
             True в случае успеха, False в случае ошибки
         """
         if not sheet_id:
-            logger.warning("ID таблицы не указан")
+            logger.warning("[DEBUG-SHEETS] ID таблицы не указан")
             return False
         
         try:
+            # Проверка входных данных
+            if not user_message and not assistant_message:
+                logger.warning("[DEBUG-SHEETS] Пустые сообщения, запись пропущена")
+                return False
+            
+            logger.info(f"[DEBUG-SHEETS] Подготовка записи диалога в таблицу: {sheet_id}")
+            logger.info(f"[DEBUG-SHEETS] Сообщение пользователя ({len(user_message)} символов): '{user_message[:50]}...'")
+            logger.info(f"[DEBUG-SHEETS] Ответ ассистента ({len(assistant_message)} символов): '{assistant_message[:50]}...'")
+            
             # Подготовка данных для записи
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
@@ -139,8 +149,9 @@ class GoogleSheetsService:
                         function_text = json.dumps(function_result, ensure_ascii=False)
                     else:
                         function_text = str(function_result)
+                    logger.info(f"[DEBUG-SHEETS] Результат функции: {function_text[:50]}...")
                 except Exception as e:
-                    logger.error(f"Ошибка форматирования результата функции: {str(e)}")
+                    logger.error(f"[DEBUG-SHEETS] Ошибка форматирования результата функции: {str(e)}")
                     function_text = f"Ошибка форматирования: {str(e)}"
             
             # Данные для записи
@@ -151,60 +162,82 @@ class GoogleSheetsService:
             
             def append_values():
                 try:
-                    logger.info(f"Запись диалога в таблицу: {sheet_id}")
-                    service = GoogleSheetsService._get_sheets_service()
+                    logger.info(f"[DEBUG-SHEETS] Запись диалога в таблицу: {sheet_id}")
+                    
+                    # Добавляем проверку сервисного аккаунта
+                    if not SERVICE_ACCOUNT_INFO or "private_key" not in SERVICE_ACCOUNT_INFO:
+                        logger.error("[DEBUG-SHEETS] Отсутствуют необходимые данные сервисного аккаунта")
+                        if SERVICE_ACCOUNT_INFO:
+                            logger.error(f"[DEBUG-SHEETS] Доступные ключи: {', '.join(SERVICE_ACCOUNT_INFO.keys())}")
+                        return False, "Отсутствуют данные сервисного аккаунта"
+                    
+                    # Пытаемся получить сервис
+                    try:
+                        service = GoogleSheetsService._get_sheets_service()
+                        logger.info("[DEBUG-SHEETS] Сервис Google Sheets API успешно получен")
+                    except Exception as e:
+                        logger.error(f"[DEBUG-SHEETS] Ошибка получения сервиса Sheets API: {str(e)}")
+                        return False, f"Ошибка сервиса: {str(e)}"
                     
                     body = {
                         'values': values
                     }
                     
                     # Отправляем запрос
-                    result = service.spreadsheets().values().append(
-                        spreadsheetId=sheet_id,
-                        range='A:D',
-                        valueInputOption='RAW',
-                        insertDataOption='INSERT_ROWS',
-                        body=body
-                    ).execute()
-                    
-                    logger.info(f"Диалог успешно записан в таблицу")
-                    return True, None
-                except HttpError as http_error:
-                    status_code = http_error.resp.status if hasattr(http_error, 'resp') else 'unknown'
-                    logger.error(f"HTTP ошибка {status_code} при записи в таблицу: {str(http_error)}")
-                    
-                    if status_code == 403:
-                        logger.error("Доступ запрещен. Проверьте настройки доступа к таблице.")
-                    elif status_code == 404:
-                        logger.error("Таблица не найдена. Проверьте ID таблицы.")
-                    
-                    return False, f"HTTP ошибка {status_code}: {str(http_error)}"
+                    try:
+                        result = service.spreadsheets().values().append(
+                            spreadsheetId=sheet_id,
+                            range='A:D',
+                            valueInputOption='RAW',
+                            insertDataOption='INSERT_ROWS',
+                            body=body
+                        ).execute()
+                        
+                        logger.info(f"[DEBUG-SHEETS] Диалог успешно записан в таблицу. Ответ API: {result}")
+                        return True, None
+                    except HttpError as http_error:
+                        status_code = http_error.resp.status if hasattr(http_error, 'resp') else 'unknown'
+                        error_content = http_error.content.decode('utf-8') if hasattr(http_error, 'content') else 'unknown'
+                        logger.error(f"[DEBUG-SHEETS] HTTP ошибка {status_code} при записи в таблицу: {str(http_error)}")
+                        logger.error(f"[DEBUG-SHEETS] Содержимое ошибки: {error_content}")
+                        
+                        if status_code == 403:
+                            logger.error("[DEBUG-SHEETS] Доступ запрещен. Проверьте настройки доступа к таблице.")
+                        elif status_code == 404:
+                            logger.error("[DEBUG-SHEETS] Таблица не найдена. Проверьте ID таблицы.")
+                        
+                        return False, f"HTTP ошибка {status_code}: {str(http_error)}"
                 except Exception as e:
-                    logger.error(f"Непредвиденная ошибка при записи в таблицу: {str(e)}")
+                    logger.error(f"[DEBUG-SHEETS] Непредвиденная ошибка при записи в таблицу: {str(e)}")
+                    logger.error(f"[DEBUG-SHEETS] Трассировка: {traceback.format_exc()}")
                     return False, f"Ошибка: {str(e)}"
             
             try:
+                logger.info("[DEBUG-SHEETS] Запуск асинхронной задачи для записи в таблицу")
                 success, error_message = await loop.run_in_executor(None, append_values)
                 
                 if success:
+                    logger.info("[DEBUG-SHEETS] Диалог успешно записан в таблицу")
                     return True
                 else:
-                    logger.error(f"Не удалось записать диалог в таблицу: {error_message}")
+                    logger.error(f"[DEBUG-SHEETS] Не удалось записать диалог в таблицу: {error_message}")
                     
                     # Локальное логирование при ошибке
-                    logger.info(f"[ЛОКАЛЬНЫЙ ЛОГ] Пользователь: {user_message[:100]}...")
-                    logger.info(f"[ЛОКАЛЬНЫЙ ЛОГ] Ассистент: {assistant_message[:100]}...")
+                    logger.info(f"[DEBUG-SHEETS] [ЛОКАЛЬНЫЙ ЛОГ] Пользователь: {user_message[:100]}...")
+                    logger.info(f"[DEBUG-SHEETS] [ЛОКАЛЬНЫЙ ЛОГ] Ассистент: {assistant_message[:100]}...")
                     
-                    # Возвращаем True, чтобы не блокировать основной функционал
-                    return True
+                    # Возвращаем False, чтобы показать ошибку
+                    return False
             except Exception as e:
-                logger.error(f"Ошибка при запуске executor: {str(e)}")
-                return True
+                logger.error(f"[DEBUG-SHEETS] Ошибка при запуске executor: {str(e)}")
+                logger.error(f"[DEBUG-SHEETS] Трассировка: {traceback.format_exc()}")
+                return False
                 
         except Exception as e:
-            logger.error(f"Ошибка при логировании диалога: {str(e)}")
-            # Возвращаем True, чтобы не блокировать основной функционал
-            return True
+            logger.error(f"[DEBUG-SHEETS] Ошибка при логировании диалога: {str(e)}")
+            logger.error(f"[DEBUG-SHEETS] Трассировка: {traceback.format_exc()}")
+            # Возвращаем False, чтобы показать ошибку
+            return False
     
     @staticmethod
     async def verify_sheet_access(sheet_id: str) -> Dict[str, Any]:
