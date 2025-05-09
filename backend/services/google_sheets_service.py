@@ -49,10 +49,10 @@ class GoogleSheetsService:
     @classmethod
     def _get_sheets_service(cls):
         """
-        Получить сервис Google Sheets API с расширенным логированием
+        Получить сервис Google Sheets API с минимальным логированием
         
         Returns:
-            Resource object для взаимодействия с Google Sheets API или None в случае ошибки
+            Resource object для взаимодействия с Google Sheets API
         """
         if cls._service is not None:
             return cls._service
@@ -86,16 +86,12 @@ class GoogleSheetsService:
                 key_end = SERVICE_ACCOUNT_INFO.get("private_key", "")[-50:] if SERVICE_ACCOUNT_INFO.get("private_key", "") else ""
                 logger.error(f"Начало приватного ключа: {key_start}...")
                 logger.error(f"Конец приватного ключа: ...{key_end}")
-                return None
+                raise
             
             # Получаем токен
-            try:
-                request = google.auth.transport.requests.Request()
-                credentials.refresh(request)
-                logger.info("Токен получен успешно!")
-            except Exception as e:
-                logger.error(f"Ошибка получения токена: {str(e)}")
-                return None
+            request = google.auth.transport.requests.Request()
+            credentials.refresh(request)
+            logger.info("Токен получен успешно!")
             
             # Создаем сервис
             service = build('sheets', 'v4', credentials=credentials, cache_discovery=False)
@@ -105,71 +101,7 @@ class GoogleSheetsService:
             return service
         except Exception as e:
             logger.error(f"Ошибка при инициализации Google Sheets API: {str(e)}")
-            return None
-    
-    @staticmethod
-    async def log_conversation_to_file(
-        sheet_id: str,
-        user_message: str,
-        assistant_message: str,
-        function_result: Optional[Dict[str, Any]] = None
-    ) -> bool:
-        """
-        Временная функция для записи диалога в локальный файл при проблемах с Google Sheets
-        
-        Args:
-            sheet_id: ID Google таблицы
-            user_message: Сообщение пользователя
-            assistant_message: Ответ ассистента
-            function_result: Результат выполнения функции (опционально)
-            
-        Returns:
-            True (всегда успешно)
-        """
-        try:
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Формируем текст для записи
-            function_text = "none"
-            if function_result:
-                try:
-                    if isinstance(function_result, dict):
-                        function_text = json.dumps(function_result, ensure_ascii=False)
-                    else:
-                        function_text = str(function_result)
-                except:
-                    function_text = "Ошибка форматирования"
-            
-            # Путь к файлу журнала (в директории для временных файлов)
-            log_dir = "/tmp/wellcomeai_logs"
-            os.makedirs(log_dir, exist_ok=True)
-            log_file = f"{log_dir}/conversation_logs.txt"
-            
-            # Запись в файл
-            log_entry = f"""
-=== НОВЫЙ ДИАЛОГ {now} ===
-GOOGLE SHEET ID: {sheet_id}
-ПОЛЬЗОВАТЕЛЬ: {user_message}
-АССИСТЕНТ: {assistant_message}
-ФУНКЦИЯ: {function_text}
-===========================
-"""
-            
-            # Асинхронная запись в файл через executor
-            loop = asyncio.get_event_loop()
-            
-            def write_to_file():
-                with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(log_entry)
-                return True
-                
-            await loop.run_in_executor(None, write_to_file)
-            logger.info(f"Диалог записан в локальный файл: {log_file}")
-            
-            return True
-        except Exception as e:
-            logger.error(f"Ошибка записи в локальный файл: {str(e)}")
-            return True  # Возвращаем True, чтобы не блокировать основной функционал
+            raise
     
     @staticmethod
     async def log_conversation(
@@ -190,27 +122,8 @@ GOOGLE SHEET ID: {sheet_id}
         Returns:
             True в случае успеха, False в случае ошибки
         """
-        # Прежде всего, сохраняем в локальный файл
-        await GoogleSheetsService.log_conversation_to_file(
-            sheet_id=sheet_id,
-            user_message=user_message,
-            assistant_message=assistant_message,
-            function_result=function_result
-        )
-        
         if not sheet_id:
             logger.warning("ID таблицы не указан")
-            return False
-        
-        logger.info(f"Начинаем запись диалога в таблицу {sheet_id}")
-        logger.info(f"Сообщение пользователя: {user_message[:50]}...")
-        logger.info(f"Сообщение ассистента: {assistant_message[:50]}...")
-        
-        # Проверяем наличие необходимых данных сервисного аккаунта
-        if not SERVICE_ACCOUNT_INFO or "private_key" not in SERVICE_ACCOUNT_INFO:
-            logger.error("Отсутствуют данные сервисного аккаунта Google")
-            if SERVICE_ACCOUNT_INFO:
-                logger.error(f"Доступные ключи: {', '.join(SERVICE_ACCOUNT_INFO.keys())}")
             return False
         
         try:
@@ -241,10 +154,6 @@ GOOGLE SHEET ID: {sheet_id}
                     logger.info(f"Запись диалога в таблицу: {sheet_id}")
                     service = GoogleSheetsService._get_sheets_service()
                     
-                    if not service:
-                        logger.error("Не удалось получить сервис Google Sheets")
-                        return False, "Ошибка инициализации сервиса Google Sheets"
-                    
                     body = {
                         'values': values
                     }
@@ -265,25 +174,19 @@ GOOGLE SHEET ID: {sheet_id}
                     logger.error(f"HTTP ошибка {status_code} при записи в таблицу: {str(http_error)}")
                     
                     if status_code == 403:
-                        error_msg = "Доступ запрещен. Проверьте настройки доступа к таблице."
-                        logger.error(error_msg)
-                        return False, error_msg
+                        logger.error("Доступ запрещен. Проверьте настройки доступа к таблице.")
                     elif status_code == 404:
-                        error_msg = "Таблица не найдена. Проверьте ID таблицы."
-                        logger.error(error_msg)
-                        return False, error_msg
+                        logger.error("Таблица не найдена. Проверьте ID таблицы.")
                     
                     return False, f"HTTP ошибка {status_code}: {str(http_error)}"
                 except Exception as e:
-                    error_msg = f"Непредвиденная ошибка при записи в таблицу: {str(e)}"
-                    logger.error(error_msg)
-                    return False, error_msg
+                    logger.error(f"Непредвиденная ошибка при записи в таблицу: {str(e)}")
+                    return False, f"Ошибка: {str(e)}"
             
             try:
                 success, error_message = await loop.run_in_executor(None, append_values)
                 
                 if success:
-                    logger.info(f"Диалог успешно записан в таблицу {sheet_id}")
                     return True
                 else:
                     logger.error(f"Не удалось записать диалог в таблицу: {error_message}")
@@ -292,16 +195,16 @@ GOOGLE SHEET ID: {sheet_id}
                     logger.info(f"[ЛОКАЛЬНЫЙ ЛОГ] Пользователь: {user_message[:100]}...")
                     logger.info(f"[ЛОКАЛЬНЫЙ ЛОГ] Ассистент: {assistant_message[:100]}...")
                     
-                    # Возвращаем False, чтобы вызывающий код знал о проблеме
-                    return False
+                    # Возвращаем True, чтобы не блокировать основной функционал
+                    return True
             except Exception as e:
                 logger.error(f"Ошибка при запуске executor: {str(e)}")
-                return False
+                return True
                 
         except Exception as e:
             logger.error(f"Ошибка при логировании диалога: {str(e)}")
-            # Возвращаем False, чтобы вызывающий код знал о проблеме
-            return False
+            # Возвращаем True, чтобы не блокировать основной функционал
+            return True
     
     @staticmethod
     async def verify_sheet_access(sheet_id: str) -> Dict[str, Any]:
@@ -326,12 +229,6 @@ GOOGLE SHEET ID: {sheet_id}
                     
                     # Получаем сервис
                     service = GoogleSheetsService._get_sheets_service()
-                    
-                    if not service:
-                        return {
-                            "success": False,
-                            "message": "Ошибка инициализации сервиса Google Sheets"
-                        }
                     
                     # Проверяем доступ к метаданным
                     logger.info("Получение метаданных таблицы...")
@@ -437,10 +334,6 @@ GOOGLE SHEET ID: {sheet_id}
                 try:
                     logger.info(f"Настройка таблицы: {sheet_id}")
                     service = GoogleSheetsService._get_sheets_service()
-                    
-                    if not service:
-                        logger.error("Не удалось получить сервис Google Sheets")
-                        return False
                     
                     # Проверяем существующие данные
                     logger.info("Проверка наличия заголовков...")
