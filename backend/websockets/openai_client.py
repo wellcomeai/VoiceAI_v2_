@@ -53,10 +53,6 @@ class OpenAIRealtimeClient:
         self.audio_buffer_size = 0
         self.response_in_progress = False
         self.session_ended = False
-        
-        # Буфер для хранения транскрипции
-        self.user_transcript = ""
-        self.assistant_transcript = ""
 
     async def connect(self) -> bool:
         """
@@ -456,19 +452,3 @@ class OpenAIRealtimeClient:
             except Exception as e:
                 logger.error(f"Error closing OpenAI WebSocket: {e}")
         self.is_connected = False
-        
-    def update_transcript(self, user_text: str = None, assistant_text: str = None):
-        """
-        Update transcript buffers with new text.
-        
-        Args:
-            user_text: Text from user to add
-            assistant_text: Text from assistant to add
-        """
-        if user_text:
-            self.user_transcript = user_text
-            logger.debug(f"Updated user transcript: '{self.user_transcript}', session: {self.session_id}")
-            
-        if assistant_text:
-            self.assistant_transcript = assistant_text
-            logger.debug(f"Updated assistant transcript: '{self.assistant_transcript}', session: {self.session_id}")
