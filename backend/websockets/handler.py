@@ -212,6 +212,32 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
             msg_type = response_data.get("type", "unknown")
             logger.info(f"[DEBUG] Получено сообщение от OpenAI: тип={msg_type}")
             
+            # Добавляем обработку text_delta сообщений для транскрипции речи пользователя
+            if msg_type == "text_delta":
+                if "data" in response_data:
+                    delta_value = response_data["data"].get("value", "")
+                    is_final = response_data["data"].get("final", False)
+                    
+                    if delta_value:
+                        user_transcript += delta_value
+                        logger.info(f"[DEBUG] Добавлена часть транскрипции пользователя: '{delta_value}', получилось: '{user_transcript}'")
+                    
+                    if is_final:
+                        logger.info(f"[DEBUG] Получена финальная транскрипция пользователя: '{user_transcript}'")
+                        
+                        # Сохраняем сообщение пользователя в БД
+                        if openai_client.db_session and openai_client.conversation_record_id:
+                            try:
+                                conv = openai_client.db_session.query(Conversation).get(
+                                    uuid.UUID(openai_client.conversation_record_id)
+                                )
+                                if conv:
+                                    conv.user_message = user_transcript
+                                    openai_client.db_session.commit()
+                                    logger.info(f"[DEBUG] Сохранено сообщение пользователя в БД")
+                            except Exception as e:
+                                logger.error(f"[DEBUG] Ошибка сохранения в БД: {str(e)}")
+            
             # Обработка начала ввода пользователя
             if msg_type == "input_audio_buffer.speech_started":
                 collecting_user_input = True
@@ -220,7 +246,9 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
             # Обработка события транскрипции
             if msg_type == "conversation.item.input_audio_transcription.completed":
                 if "transcript" in response_data:
-                    user_transcript = response_data.get("transcript", "")
+                    transcript = response_data.get("transcript", "")
+                    if transcript and not user_transcript:  # Только если у нас еще нет транскрипции
+                        user_transcript = transcript
                     logger.info(f"[DEBUG] Полная транскрипция пользователя: '{user_transcript}'")
                     
                     # Сохраняем сообщение пользователя в БД
@@ -268,7 +296,9 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
             if msg_type == "conversation.item.created":
                 content = response_data.get("content", {})
                 if "input" in content and "text" in content.get("input", {}):
-                    user_transcript = content.get("input", {}).get("text", "")
+                    input_text = content.get("input", {}).get("text", "")
+                    if input_text and not user_transcript:  # Только если у нас еще нет транскрипции
+                        user_transcript = input_text
                     logger.info(f"[DEBUG] Из conversation.item.created получена транскрипция пользователя: '{user_transcript}'")
                 elif "output" in content:
                     output_content = content.get("output", [])[0] if content.get("output", []) else {}
@@ -282,6 +312,13 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                 logger.info(f"[DEBUG] Из input_audio_transcription.partial получена частичная транскрипция: '{partial_transcript}'")
                 if not user_transcript:
                     user_transcript = partial_transcript
+            
+            # Лучше обрабатываем ошибки - добавляем логирование деталей ошибок
+            if msg_type == "error":
+                error_data = response_data.get("data", {})
+                error_message = error_data.get("message", "Неизвестная ошибка")
+                logger.error(f"[DEBUG] Получена ошибка от OpenAI: {error_message}")
+                logger.error(f"[DEBUG] Детали ошибки: {error_data}")
             
             if msg_type == "input_audio_buffer.committed" and not user_transcript:
                 # Попробуем получить транскрипцию из базы данных
