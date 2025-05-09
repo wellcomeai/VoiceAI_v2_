@@ -236,14 +236,13 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
         logger.error("OpenAI клиент не подключен.")
         return
     
-    # Переменные для хранения результата функции
+    # Переменные для хранения текста диалога и результата функции
+    user_transcript = ""
+    assistant_transcript = ""
     function_result = None
     
     # Получаем session_id для логов
     session_id = openai_client.session_id
-    
-    # Флаг для отслеживания завершения транскрипции
-    transcript_done = False
     
     try:
         logger.info(f"[DEBUG] Начало обработки сообщений от OpenAI для клиента {openai_client.client_id}, сессия: {session_id}")
@@ -272,45 +271,50 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                 if msg_type == "input_audio_buffer.speech_started":
                     logger.info(f"[DEBUG] Начало сбора речи пользователя, сессия: {session_id}")
                 
-                # Обработка text_delta - новое событие для текстового ввода пользователя
+                # Обработка text_delta - событие для текстового ввода/ответа
                 if msg_type == "text_delta":
                     delta_text = response_data.get("delta", {}).get("text", "")
                     is_final = response_data.get("delta", {}).get("final", False)
                     
-                    logger.info(f"[DEBUG] text_delta: '{delta_text}', is_final: {is_final}, сессия: {session_id}")
-                    
-                    # Обновляем буфер транскрипции пользователя
-                    current_transcript = openai_client.user_transcript + delta_text
-                    openai_client.update_transcript(user_text=current_transcript)
-                    
-                    if is_final:
-                        logger.info(f"[DEBUG] Финальная транскрипция пользователя: '{openai_client.user_transcript}', сессия: {session_id}")
-                        
-                        # Сохраняем сообщение пользователя в БД
-                        if openai_client.db_session and openai_client.conversation_record_id:
-                            try:
-                                conv = openai_client.db_session.query(Conversation).get(
-                                    uuid.UUID(openai_client.conversation_record_id)
-                                )
-                                if conv:
-                                    conv.user_message = openai_client.user_transcript
-                                    openai_client.db_session.commit()
-                                    logger.info(f"[DEBUG] Сохранено сообщение пользователя в БД, сессия: {session_id}")
-                            except Exception as e:
-                                logger.error(f"[DEBUG] Ошибка сохранения в БД: {str(e)}, сессия: {session_id}")
+                    # В зависимости от контекста, это может быть ввод пользователя или ответ ассистента
+                    # Обычно это ответ ассистента в текстовом формате
+                    assistant_transcript += delta_text
+                    logger.info(f"[DEBUG] text_delta (ассистент): '{delta_text}', is_final: {is_final}, сессия: {session_id}")
+                    logger.info(f"[DEBUG] Текущий ответ ассистента: '{assistant_transcript}', сессия: {session_id}")
                 
-                # Обработка события завершения транскрипции
+                # Обработка события транскрипции речи пользователя
+                if msg_type == "response.audio_transcript.delta":
+                    delta_text = response_data.get("delta", "")
+                    
+                    # ВАЖНОЕ ИСПРАВЛЕНИЕ: Это ВСЕГДА транскрипция пользовательского ввода
+                    user_transcript += delta_text
+                    logger.info(f"[DEBUG] Добавлен текст пользователя: '{delta_text}', сессия: {session_id}")
+                    logger.info(f"[DEBUG] Текущая транскрипция пользователя: '{user_transcript}', сессия: {session_id}")
+                
+                # Обработка завершения транскрипции аудио пользователя
                 if msg_type == "response.audio_transcript.done":
-                    transcript_done = True
-                    logger.info(f"[DEBUG] Завершение транскрипции, сессия: {session_id}")
+                    logger.info(f"[DEBUG] Финальная транскрипция пользователя: '{user_transcript}', сессия: {session_id}")
+                    
+                    # Сохраняем транскрипцию пользователя в БД
+                    if openai_client.db_session and openai_client.conversation_record_id and user_transcript:
+                        try:
+                            conv = openai_client.db_session.query(Conversation).get(
+                                uuid.UUID(openai_client.conversation_record_id)
+                            )
+                            if conv:
+                                conv.user_message = user_transcript
+                                openai_client.db_session.commit()
+                                logger.info(f"[DEBUG] Сохранена транскрипция пользователя в БД, сессия: {session_id}")
+                        except Exception as e:
+                            logger.error(f"[DEBUG] Ошибка сохранения в БД: {str(e)}, сессия: {session_id}")
                 
-                # Обработка события транскрипции
+                # Обработка события для ввода пользователя из полной транскрипции
                 if msg_type == "conversation.item.input_audio_transcription.completed":
                     if "transcript" in response_data:
-                        transcript_text = response_data.get("transcript", "")
-                        if transcript_text:  # Проверяем, что транскрипция не пустая
-                            openai_client.update_transcript(user_text=transcript_text)
-                            logger.info(f"[DEBUG] Полная транскрипция пользователя: '{openai_client.user_transcript}', сессия: {session_id}")
+                        full_transcript = response_data.get("transcript", "")
+                        if full_transcript:  # Проверяем, что транскрипция не пустая
+                            user_transcript = full_transcript  # Заменяем на полную транскрипцию
+                            logger.info(f"[DEBUG] Полная транскрипция пользователя: '{user_transcript}', сессия: {session_id}")
                             
                             # Сохраняем сообщение пользователя в БД
                             if openai_client.db_session and openai_client.conversation_record_id:
@@ -319,52 +323,35 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                                         uuid.UUID(openai_client.conversation_record_id)
                                     )
                                     if conv:
-                                        conv.user_message = openai_client.user_transcript
+                                        conv.user_message = user_transcript
                                         openai_client.db_session.commit()
-                                        logger.info(f"[DEBUG] Сохранено сообщение пользователя в БД из completed, сессия: {session_id}")
+                                        logger.info(f"[DEBUG] Сохранена полная транскрипция пользователя в БД, сессия: {session_id}")
                                 except Exception as e:
                                     logger.error(f"[DEBUG] Ошибка сохранения в БД: {str(e)}, сессия: {session_id}")
                 
-                # Обработка частей транскрипции и построение полного текста
-                if msg_type == "response.audio_transcript.delta":
-                    delta_text = response_data.get("delta", "")
-                    index = response_data.get("index", -1)
-                    is_final = response_data.get("is_final", False)
-                    
-                    # Печатаем больше информации для отладки
-                    logger.info(f"[DEBUG] Delta текст: '{delta_text}', index: {index}, is_final: {is_final}, сессия: {session_id}")
-                    
-                    # Собираем транскрипцию на основе индекса (0 обычно для пользователя, 1 для ассистента)
-                    if index == 0:
-                        # Пользовательская транскрипция
-                        current_user_text = openai_client.user_transcript + delta_text
-                        openai_client.update_transcript(user_text=current_user_text)
-                        logger.info(f"[DEBUG] Обновлена транскрипция пользователя: '{openai_client.user_transcript}', сессия: {session_id}")
-                    else:
-                        # Транскрипция ассистента
-                        current_assistant_text = openai_client.assistant_transcript + delta_text
-                        openai_client.update_transcript(assistant_text=current_assistant_text)
-                        logger.info(f"[DEBUG] Обновлена транскрипция ассистента: '{openai_client.assistant_transcript}', сессия: {session_id}")
-                
-                # Получение завершенной транскрипции
+                # Получение завершенной информации о диалоге
                 if msg_type == "conversation.item.created":
                     content = response_data.get("content", {})
                     if "input" in content and "text" in content.get("input", {}):
                         input_text = content.get("input", {}).get("text", "")
                         if input_text:  # Проверяем, что текст не пустой
-                            openai_client.update_transcript(user_text=input_text)
-                            logger.info(f"[DEBUG] Из conversation.item.created получена транскрипция пользователя: '{openai_client.user_transcript}', сессия: {session_id}")
+                            user_transcript = input_text  # Заменяем на полный текст
+                            logger.info(f"[DEBUG] Из conversation.item.created получен текст пользователя: '{user_transcript}', сессия: {session_id}")
                     elif "output" in content:
                         output_content = content.get("output", [])[0] if content.get("output", []) else {}
                         if isinstance(output_content, dict) and "text" in output_content:
                             output_text = output_content.get("text", "")
                             if output_text:  # Проверяем, что текст не пустой
-                                openai_client.update_transcript(assistant_text=output_text)
-                                logger.info(f"[DEBUG] Из conversation.item.created получен текст ассистента: '{openai_client.assistant_transcript}', сессия: {session_id}")
+                                assistant_transcript = output_text  # Заменяем на полный текст
+                                logger.info(f"[DEBUG] Из conversation.item.created получен текст ассистента: '{assistant_transcript}', сессия: {session_id}")
                 
-                # Завершение ввода пользователя
-                if msg_type == "input_audio_buffer.speech_stopped":
-                    logger.info(f"[DEBUG] Завершение сбора речи пользователя, сессия: {session_id}")
+                # Обновляем данные после получения текста ответа ассистента
+                if msg_type == "response.content_part.added":
+                    if "text" in response_data.get("content", {}):
+                        response_text = response_data.get("content", {}).get("text", "")
+                        if response_text:  # Проверяем, что текст не пустой
+                            assistant_transcript = response_text  # Заменяем на полный текст
+                            logger.info(f"[DEBUG] Из response.content_part.added получен текст ассистента: '{assistant_transcript}', сессия: {session_id}")
                 
                 # Обработка вызова функции
                 if msg_type == "function_call":
@@ -410,14 +397,6 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                     if websocket.client_state.name == 'CONNECTED':
                         await websocket.send_bytes(chunk)
                     continue
-                    
-                # Обновляем данные после получения текста ответа
-                if msg_type == "response.content_part.added":
-                    if "text" in response_data.get("content", {}):
-                        assistant_text = response_data.get("content", {}).get("text", "")
-                        if assistant_text:  # Проверяем, что текст не пустой
-                            openai_client.update_transcript(assistant_text=assistant_text)
-                            logger.info(f"[DEBUG] Из response.content_part.added получен текст ассистента: '{openai_client.assistant_transcript}', сессия: {session_id}")
 
                 # все остальные — JSON
                 if websocket.client_state.name == 'CONNECTED':
@@ -433,21 +412,21 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                     logger.info(f"[DEBUG] Получен сигнал завершения ответа: response.done, сессия: {session_id}")
                     
                     # Выводим финальные собранные тексты для анализа
-                    logger.info(f"[DEBUG] Завершен диалог. Пользователь: '{openai_client.user_transcript}', сессия: {session_id}")
-                    logger.info(f"[DEBUG] Завершен диалог. Ассистент: '{openai_client.assistant_transcript}', сессия: {session_id}")
+                    logger.info(f"[DEBUG] Завершен диалог. Пользователь: '{user_transcript}', сессия: {session_id}")
+                    logger.info(f"[DEBUG] Завершен диалог. Ассистент: '{assistant_transcript}', сессия: {session_id}")
                     
                     # Сохраняем сообщение ассистента в БД
-                    if openai_client.db_session and openai_client.conversation_record_id and openai_client.assistant_transcript:
+                    if openai_client.db_session and openai_client.conversation_record_id and assistant_transcript:
                         logger.info(f"[DEBUG] Сохранение ответа ассистента в БД: {openai_client.conversation_record_id}, сессия: {session_id}")
                         try:
                             conv = openai_client.db_session.query(Conversation).get(
                                 uuid.UUID(openai_client.conversation_record_id)
                             )
                             if conv:
-                                conv.assistant_message = openai_client.assistant_transcript
+                                conv.assistant_message = assistant_transcript
                                 # Также обновляем пользовательское сообщение, если оно есть
-                                if openai_client.user_transcript and not conv.user_message:
-                                    conv.user_message = openai_client.user_transcript
+                                if user_transcript and not conv.user_message:
+                                    conv.user_message = user_transcript
                                 openai_client.db_session.commit()
                                 logger.info(f"[DEBUG] Ответ ассистента сохранен в БД, сессия: {session_id}")
                         except Exception as e:
@@ -458,15 +437,11 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                         sheet_id = openai_client.assistant_config.google_sheet_id
                         logger.info(f"[DEBUG] Запись диалога в Google Sheet {sheet_id}, сессия: {session_id}")
                         
-                        # Используем транскрипции из буферов клиента
-                        user_text = openai_client.user_transcript
-                        assistant_text = openai_client.assistant_transcript
-                        
-                        logger.info(f"[DEBUG] Запись в Google Sheet - Пользователь: '{user_text}', сессия: {session_id}")
-                        logger.info(f"[DEBUG] Запись в Google Sheet - Ассистент: '{assistant_text}', сессия: {session_id}")
+                        logger.info(f"[DEBUG] Запись в Google Sheet - Пользователь: '{user_transcript}', сессия: {session_id}")
+                        logger.info(f"[DEBUG] Запись в Google Sheet - Ассистент: '{assistant_transcript}', сессия: {session_id}")
                         
                         # Проверяем наличие текста перед отправкой
-                        if not user_text and not assistant_text:
+                        if not user_transcript and not assistant_transcript:
                             logger.warning(f"[DEBUG] Пустые тексты диалога, попробуем использовать данные из БД, сессия: {session_id}")
                             # Пробуем получить данные из БД
                             if openai_client.db_session and openai_client.conversation_record_id:
@@ -475,19 +450,19 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                                         uuid.UUID(openai_client.conversation_record_id)
                                     )
                                     if conv:
-                                        user_text = conv.user_message or ""
-                                        assistant_text = conv.assistant_message or ""
-                                        logger.info(f"[DEBUG] Получены данные из БД: пользователь: '{user_text}', ассистент: '{assistant_text}', сессия: {session_id}")
+                                        user_transcript = conv.user_message or ""
+                                        assistant_transcript = conv.assistant_message or ""
+                                        logger.info(f"[DEBUG] Получены данные из БД: пользователь: '{user_transcript}', ассистент: '{assistant_transcript}', сессия: {session_id}")
                                 except Exception as e:
                                     logger.error(f"[DEBUG] Ошибка при получении данных из БД: {str(e)}, сессия: {session_id}")
                         
                         # Используем сохраненные значения для записи в Google Sheets
-                        if user_text or assistant_text:
+                        if user_transcript or assistant_transcript:
                             try:
                                 sheets_result = await GoogleSheetsService.log_conversation(
                                     sheet_id=sheet_id,
-                                    user_message=user_text,
-                                    assistant_message=assistant_text,
+                                    user_message=user_transcript,
+                                    assistant_message=assistant_transcript,
                                     function_result=function_result
                                 )
                                 if sheets_result:
@@ -517,7 +492,7 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                 # Продолжаем обработку, не выходя из цикла
 
     except asyncio.CancelledError:
-        logger.info(f"[DEBUG] Задача обработки сообщений OpenAI отменена для сессии: {session_id}")
+        logger.info(f"[DEBUG] Задача обработки сообщений OpenAI отменена для сессия: {session_id}")
         return
     except Exception as e:
         logger.error(f"[DEBUG] Неожиданная ошибка в обработчике сообщений OpenAI: {e}, сессия: {session_id}")
