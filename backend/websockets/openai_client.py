@@ -19,11 +19,6 @@ DEFAULT_VOICE = "alloy"
 DEFAULT_SYSTEM_MESSAGE = "You are a helpful voice assistant."
 
 class OpenAIRealtimeClient:
-    """
-    Client for interacting with OpenAI's Realtime API through WebSockets.
-    Handles voice interactions, function calling, and conversation tracking.
-    """
-    
     def __init__(
         self,
         api_key: str,
@@ -31,15 +26,6 @@ class OpenAIRealtimeClient:
         client_id: str,
         db_session: Any = None
     ):
-        """
-        Initialize the OpenAI Realtime client.
-        
-        Args:
-            api_key: OpenAI API key
-            assistant_config: Configuration for the assistant
-            client_id: Unique identifier for the client
-            db_session: Database session for persistence (optional)
-        """
         self.api_key = api_key
         self.assistant_config = assistant_config
         self.client_id = client_id
@@ -51,13 +37,6 @@ class OpenAIRealtimeClient:
         self.conversation_record_id: Optional[str] = None
 
     async def connect(self) -> bool:
-        """
-        Establish WebSocket connection to OpenAI Realtime API
-        and start a session with necessary capabilities.
-        
-        Returns:
-            bool: True if connection was successful, False otherwise
-        """
         if not self.api_key:
             logger.error("OpenAI API key not provided")
             return False
@@ -72,7 +51,7 @@ class OpenAIRealtimeClient:
                 websockets.connect(
                     self.openai_url,
                     extra_headers=headers,
-                    max_size=15*1024*1024,  # 15 MB max message size
+                    max_size=15*1024*1024,
                     ping_interval=30,
                     ping_timeout=120,
                     close_timeout=15
@@ -82,39 +61,10 @@ class OpenAIRealtimeClient:
             self.is_connected = True
             logger.info(f"Connected to OpenAI for client {self.client_id}")
 
-            # Отправка сообщения "start" для инициализации сессии
-            start_message = {
-                "type": "start",
-                "data": {
-                    "capabilities": ["audio", "text", "voice_transcription"]
-                }
-            }
-            
-            try:
-                await self.ws.send(json.dumps(start_message))
-                logger.info("Start message with capabilities sent")
-                
-                # Ожидаем ответ от сервера
-                response = await asyncio.wait_for(self.ws.recv(), timeout=5)
-                response_data = json.loads(response)
-                
-                # Проверяем ответ - должно быть "session.created" или "session.initialized"
-                if response_data.get("type") in ["session.created", "session.initialized"]:
-                    logger.info(f"Session started successfully: {response_data.get('type')}")
-                else:
-                    logger.warning(f"Unexpected response after start: {response_data.get('type')}")
-                    
-            except Exception as e:
-                logger.error(f"Error sending start message: {e}")
-                await self.close()
-                return False
-
-            # Fetch fresh settings from assistant_config
             voice = self.assistant_config.voice or DEFAULT_VOICE
             system_message = getattr(self.assistant_config, "system_prompt", None) or DEFAULT_SYSTEM_MESSAGE
             functions = getattr(self.assistant_config, "functions", None)
 
-            # Send updated session settings with actual system_prompt
             if not await self.update_session(
                 voice=voice,
                 system_message=system_message,
@@ -138,38 +88,20 @@ class OpenAIRealtimeClient:
         system_message: str = DEFAULT_SYSTEM_MESSAGE,
         functions: Optional[Union[List[Dict[str, Any]], Dict[str, Any]]] = None
     ) -> bool:
-        """
-        Update session settings on the OpenAI Realtime API side.
-        
-        Args:
-            voice: Voice ID to use for speech synthesis
-            system_message: System instructions for the assistant
-            functions: List of functions or dictionary with enabled_functions key
-            
-        Returns:
-            bool: True if update was successful, False otherwise
-        """
         if not self.is_connected or not self.ws:
             logger.error("Cannot update session: not connected")
             return False
-            
+
         tools = []
         tool_choice = "none"
-        
-        # Normalize function format
+
         if functions:
-            # Import function definitions
             from backend.utils.function_registry import FUNCTION_DEFINITIONS
-            
-            # Handle case when functions are in {enabled_functions: [...]} format
+
             if isinstance(functions, dict) and "enabled_functions" in functions:
                 enabled_functions = functions.get("enabled_functions", [])
-                
-                # Format for Realtime API
                 for func_name in enabled_functions:
-                    # Check if function exists in our definitions
                     if func_name in FUNCTION_DEFINITIONS:
-                        # Get function info from definitions
                         func_def = FUNCTION_DEFINITIONS[func_name]
                         tools.append({
                             "type": "function",
@@ -184,6 +116,76 @@ class OpenAIRealtimeClient:
                             }
                         })
             else:
+                for func in functions:
+                    func_name = func.get("name")
+                    if func_name:
+                        tools.append({
+                            "type": "function",
+                            "function": {
+                                "name": func_name,
+                                "description": func.get("description", f"Function {func_name}"),
+                                "parameters": func.get("parameters", {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": []
+                                })
+                            }
+                        })
+
+        if tools:
+            tool_choice = "auto"
+
+        payload = {
+            "type": "session.update",
+            "data": {
+                "instructions": system_message,
+                "voice": voice,
+                "capabilities": ["audio", "text", "voice_transcription"],
+                "tools": tools,
+                "tool_choice": tool_choice
+            }
+        }
+
+        try:
+            logger.info(f"Sending update with payload: {json.dumps(payload)[:200]}...")
+            await self.ws.send(json.dumps(payload))
+            logger.info(f"Session settings sent (voice={voice}, tools={len(tools)})")
+
+            response = await asyncio.wait_for(self.ws.recv(), timeout=5)
+            response_data = json.loads(response)
+            logger.info(f"Response after update: {json.dumps(response_data)}")
+
+            if response_data.get("type") == "session.updated":
+                logger.info("Session updated successfully")
+            elif response_data.get("type") == "error":
+                error_message = response_data.get("data", {}).get("message", "Unknown error")
+                logger.error(f"Error updating session: {error_message}")
+            else:
+                logger.warning(f"Unexpected response after session.update: {response_data.get('type')}")
+
+            if self.db_session:
+                try:
+                    conv = Conversation(
+                        assistant_id=self.assistant_config.id,
+                        session_id=self.session_id,
+                        user_message="",
+                        assistant_message="",
+                    )
+                    self.db_session.add(conv)
+                    self.db_session.commit()
+                    self.db_session.refresh(conv)
+                    self.conversation_record_id = str(conv.id)
+                    logger.info(f"Created conversation record: {self.conversation_record_id}")
+                except Exception as e:
+                    logger.error(f"Error creating Conversation in DB: {e}")
+
+            return True
+        except Exception as e:
+            logger.error(f"Error sending session.update: {e}")
+            return False
+
+    # Остальная логика оставлена без изменений
+
                 # Handle case when functions are already in the right format
                 for func in functions:
                     func_name = func.get("name")
