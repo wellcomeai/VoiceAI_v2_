@@ -18,6 +18,7 @@ logger = get_logger(__name__)
 DEFAULT_VOICE = "alloy"
 DEFAULT_SYSTEM_MESSAGE = "You are a helpful voice assistant."
 MIN_AUDIO_LENGTH_BYTES = 1600  # примерно 100мс аудио при 16kHz, mono, 16-bit
+INACTIVITY_TIMEOUT = 30  # секунды неактивности до закрытия сессии
 
 class OpenAIRealtimeClient:
     """
@@ -53,6 +54,8 @@ class OpenAIRealtimeClient:
         self.audio_buffer_size = 0
         self.response_in_progress = False
         self.session_ended = False
+        self.inactivity_timer = None
+        self.last_activity_time = time.time()
 
     async def connect(self) -> bool:
         """
@@ -310,6 +313,9 @@ class OpenAIRealtimeClient:
             return False
             
         try:
+            # Обновить время последней активности
+            self.last_activity_time = time.time()
+            
             # Отслеживаем размер буфера
             chunk_size = len(audio_chunk)
             self.audio_buffer_size += chunk_size
@@ -353,6 +359,9 @@ class OpenAIRealtimeClient:
             return False
             
         try:
+            # Обновить время последней активности
+            self.last_activity_time = time.time()
+            
             await self.ws.send(json.dumps({
                 "type": "input_audio_buffer.commit",
                 "event_id": f"commit_{time.time()}"
@@ -384,6 +393,9 @@ class OpenAIRealtimeClient:
             return False
             
         try:
+            # Обновить время последней активности
+            self.last_activity_time = time.time()
+            
             await self.ws.send(json.dumps({
                 "type": "input_audio_buffer.clear",
                 "event_id": f"clear_{time.time()}"
@@ -419,6 +431,9 @@ class OpenAIRealtimeClient:
             return False
             
         try:
+            # Обновить время последней активности
+            self.last_activity_time = time.time()
+            
             await self.ws.send(json.dumps({
                 "type": "response.cancel",
                 "event_id": f"cancel_{time.time()}"
@@ -432,13 +447,45 @@ class OpenAIRealtimeClient:
         except Exception as e:
             logger.error(f"Error cancelling response: {e}")
             return False
+    
+    async def start_inactivity_timer(self):
+        """
+        Start a timer to close the session if no activity is detected.
+        """
+        if self.inactivity_timer:
+            self.inactivity_timer.cancel()
+            
+        self.inactivity_timer = asyncio.create_task(self._check_inactivity())
+    
+    async def _check_inactivity(self):
+        """
+        Check for inactivity and close the session if needed.
+        """
+        try:
+            await asyncio.sleep(INACTIVITY_TIMEOUT)
+            current_time = time.time()
+            elapsed = current_time - self.last_activity_time
+            
+            if elapsed >= INACTIVITY_TIMEOUT and not self.session_ended:
+                logger.info(f"Session inactive for {elapsed:.1f}s, closing due to inactivity: {self.session_id}")
+                await self.close()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Error in inactivity check: {e}")
             
     def end_session(self):
         """
         Mark the session as ended to prevent further operations.
         """
-        self.session_ended = True
-        logger.info(f"Session marked as ended: {self.session_id}")
+        if not self.session_ended:
+            self.session_ended = True
+            logger.info(f"Session marked as ended: {self.session_id}")
+            
+            # Cancel inactivity timer if exists
+            if self.inactivity_timer:
+                self.inactivity_timer.cancel()
+                self.inactivity_timer = None
 
     async def close(self) -> None:
         """
