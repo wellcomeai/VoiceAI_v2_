@@ -15,12 +15,41 @@ from backend.models.assistant import AssistantConfig
 from backend.models.conversation import Conversation
 from backend.utils.audio_utils import base64_to_audio_buffer
 from backend.websockets.openai_client import OpenAIRealtimeClient
-from backend.services.google_sheets_service import GoogleSheetsService  # Новый импорт
+from backend.services.google_sheets_service import GoogleSheetsService
 
 logger = get_logger(__name__)
 
 # Активные соединения по каждому assistant_id
 active_connections: Dict[str, List[WebSocket]] = {}
+
+
+async def add_debug_printer(openai_client, websocket):
+    """
+    Добавляет отдельную задачу для вывода всех получаемых сообщений в логи
+    для диагностики.
+    """
+    if not openai_client.is_connected or not openai_client.ws:
+        return
+        
+    logger.info("Запущен отладочный принтер событий OpenAI")
+    
+    try:
+        while True:
+            try:
+                raw = await openai_client.ws.recv()
+                data = json.loads(raw)
+                
+                # Не логируем аудио-чанки, чтобы не загромождать логи
+                if data.get("type") != "audio":
+                    logger.info(f"OpenAI event: {data.get('type')} - {json.dumps(data)[:200]}...")
+                    
+            except asyncio.CancelledError:
+                logger.info("Отладочный принтер остановлен")
+                break
+            except Exception as e:
+                logger.error(f"Ошибка в отладочном принтере: {str(e)}")
+    except Exception as e:
+        logger.error(f"Отладочный принтер завершил работу с ошибкой: {str(e)}")
 
 
 async def handle_websocket_connection(
@@ -30,6 +59,7 @@ async def handle_websocket_connection(
 ) -> None:
     client_id = str(uuid.uuid4())
     openai_client = None
+    debug_printer_task = None
 
     try:
         await websocket.accept()
@@ -92,6 +122,9 @@ async def handle_websocket_connection(
 
         # Запускаем приём сообщений от OpenAI
         openai_task = asyncio.create_task(handle_openai_messages(openai_client, websocket))
+        
+        # Добавляем отладочный принтер для всех событий (только для отладки)
+        debug_printer_task = asyncio.create_task(add_debug_printer(openai_client, websocket))
 
         # Основной цикл приёма от клиента
         while True:
@@ -182,6 +215,9 @@ async def handle_websocket_connection(
         conns = active_connections.get(assistant_id, [])
         if websocket in conns:
             conns.remove(websocket)
+        # отменяем задачи
+        if debug_printer_task and not debug_printer_task.done():
+            debug_printer_task.cancel()
         logger.info(f"Removed WebSocket connection: client_id={client_id}")
 
 
@@ -194,10 +230,27 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
     assistant_message = ""
     function_result = None
     
+    # Проверяем наличие google_sheet_id в конфигурации ассистента
+    sheet_id = None
+    if openai_client.assistant_config and openai_client.assistant_config.google_sheet_id:
+        sheet_id = openai_client.assistant_config.google_sheet_id
+        logger.info(f"Ассистент настроен для логирования в Google таблицу: {sheet_id}")
+    else:
+        logger.warning("Ассистент не настроен для логирования в Google таблицу (google_sheet_id не задан)")
+    
     try:
+        # Отслеживаем все типы полученных сообщений для диагностики
+        received_types = set()
+        
         while True:
             raw = await openai_client.ws.recv()
             response_data = json.loads(raw)
+            
+            # Логируем типы сообщений для диагностики
+            msg_type = response_data.get("type", "unknown")
+            if msg_type not in received_types:
+                received_types.add(msg_type)
+                logger.info(f"Получен новый тип сообщения от OpenAI: {msg_type}")
             
             # Обработка вызова функции
             if response_data.get("type") == "function_call":
@@ -249,36 +302,73 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                 text = response_data.get("text", "")
                 assistant_message = text  # Сохраняем для логирования
                 
+                logger.info(f"Получен ответ ассистента: {text[:50]}...")
+                
+                if not user_message:
+                    logger.warning("Сообщение пользователя пустое! Возможно, событие транскрипции не было получено")
+                
                 if openai_client.db_session and openai_client.conversation_record_id and text:
-                    conv = openai_client.db_session.query(Conversation).get(
-                        uuid.UUID(openai_client.conversation_record_id)
-                    )
-                    conv.assistant_message = text
-                    openai_client.db_session.commit()
+                    try:
+                        conv = openai_client.db_session.query(Conversation).get(
+                            uuid.UUID(openai_client.conversation_record_id)
+                        )
+                        if conv:
+                            conv.assistant_message = text
+                            openai_client.db_session.commit()
+                            logger.info(f"Сохранено сообщение ассистента в БД: {openai_client.conversation_record_id}")
+                        else:
+                            logger.warning(f"Запись диалога не найдена: {openai_client.conversation_record_id}")
+                    except Exception as e:
+                        logger.error(f"Ошибка при сохранении сообщения ассистента в БД: {str(e)}")
                     
                     # Если у ассистента есть google_sheet_id, логируем разговор
-                    if openai_client.assistant_config and openai_client.assistant_config.google_sheet_id:
-                        sheet_id = openai_client.assistant_config.google_sheet_id
-                        # Используем сохраненные значения
-                        asyncio.create_task(GoogleSheetsService.log_conversation(
-                            sheet_id=sheet_id,
-                            user_message=user_message,
-                            assistant_message=text,
-                            function_result=function_result
-                        ))
+                    if sheet_id:
+                        logger.info(f"Начинаем логирование в Google таблицу {sheet_id}")
+                        logger.info(f"Сообщение пользователя для лога: {user_message[:50]}...")
+                        logger.info(f"Сообщение ассистента для лога: {text[:50]}...")
+                        
+                        # Создаем явный таймаут для задачи логирования
+                        try:
+                            log_task = asyncio.create_task(GoogleSheetsService.log_conversation(
+                                sheet_id=sheet_id,
+                                user_message=user_message,
+                                assistant_message=text,
+                                function_result=function_result
+                            ))
+                            
+                            # Ожидаем выполнения с таймаутом
+                            success = await asyncio.wait_for(log_task, timeout=15.0)
+                            
+                            if success:
+                                logger.info("Логирование в Google таблицу выполнено успешно")
+                            else:
+                                logger.error("Логирование в Google таблицу не выполнено")
+                        except asyncio.TimeoutError:
+                            logger.error("Тайм-аут при логировании в Google таблицу")
+                        except Exception as e:
+                            logger.error(f"Ошибка при логировании в Google таблицу: {str(e)}")
+                        
                         # Сбрасываем результат функции после логирования
                         function_result = None
                         
             elif t == "conversation.item.input_audio_transcription.completed":
                 transcript = response_data.get("transcript", "")
                 user_message = transcript  # Сохраняем для логирования
+                logger.info(f"Получена транскрипция от пользователя: {transcript[:50]}...")
                 
                 if openai_client.db_session and openai_client.conversation_record_id and transcript:
-                    conv = openai_client.db_session.query(Conversation).get(
-                        uuid.UUID(openai_client.conversation_record_id)
-                    )
-                    conv.user_message = transcript
-                    openai_client.db_session.commit()
+                    try:
+                        conv = openai_client.db_session.query(Conversation).get(
+                            uuid.UUID(openai_client.conversation_record_id)
+                        )
+                        if conv:
+                            conv.user_message = transcript
+                            openai_client.db_session.commit()
+                            logger.info(f"Сохранено сообщение пользователя в БД: {openai_client.conversation_record_id}")
+                        else:
+                            logger.warning(f"Запись диалога не найдена: {openai_client.conversation_record_id}")
+                    except Exception as e:
+                        logger.error(f"Ошибка при сохранении сообщения пользователя в БД: {str(e)}")
 
     except (ConnectionClosed, asyncio.CancelledError):
         return
