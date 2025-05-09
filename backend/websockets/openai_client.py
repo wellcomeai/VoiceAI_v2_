@@ -19,6 +19,11 @@ DEFAULT_VOICE = "alloy"
 DEFAULT_SYSTEM_MESSAGE = "You are a helpful voice assistant."
 
 class OpenAIRealtimeClient:
+    """
+    Client for interacting with OpenAI's Realtime API through WebSockets.
+    Handles voice interactions, function calling, and conversation tracking.
+    """
+    
     def __init__(
         self,
         api_key: str,
@@ -26,6 +31,15 @@ class OpenAIRealtimeClient:
         client_id: str,
         db_session: Any = None
     ):
+        """
+        Initialize the OpenAI Realtime client.
+        
+        Args:
+            api_key: OpenAI API key
+            assistant_config: Configuration for the assistant
+            client_id: Unique identifier for the client
+            db_session: Database session for persistence (optional)
+        """
         self.api_key = api_key
         self.assistant_config = assistant_config
         self.client_id = client_id
@@ -37,6 +51,14 @@ class OpenAIRealtimeClient:
         self.conversation_record_id: Optional[str] = None
 
     async def connect(self) -> bool:
+        """
+        Establish WebSocket connection to OpenAI Realtime API
+        and immediately send up-to-date session settings,
+        including the system_prompt from the database.
+        
+        Returns:
+            bool: True if connection was successful, False otherwise
+        """
         if not self.api_key:
             logger.error("OpenAI API key not provided")
             return False
@@ -51,7 +73,7 @@ class OpenAIRealtimeClient:
                 websockets.connect(
                     self.openai_url,
                     extra_headers=headers,
-                    max_size=15*1024*1024,
+                    max_size=15*1024*1024,  # 15 MB max message size
                     ping_interval=30,
                     ping_timeout=120,
                     close_timeout=15
@@ -61,10 +83,12 @@ class OpenAIRealtimeClient:
             self.is_connected = True
             logger.info(f"Connected to OpenAI for client {self.client_id}")
 
+            # Fetch fresh settings from assistant_config
             voice = self.assistant_config.voice or DEFAULT_VOICE
             system_message = getattr(self.assistant_config, "system_prompt", None) or DEFAULT_SYSTEM_MESSAGE
             functions = getattr(self.assistant_config, "functions", None)
 
+            # Send updated session settings with actual system_prompt
             if not await self.update_session(
                 voice=voice,
                 system_message=system_message,
@@ -88,181 +112,116 @@ class OpenAIRealtimeClient:
         system_message: str = DEFAULT_SYSTEM_MESSAGE,
         functions: Optional[Union[List[Dict[str, Any]], Dict[str, Any]]] = None
     ) -> bool:
+        """
+        Update session settings on the OpenAI Realtime API side.
+        
+        Args:
+            voice: Voice ID to use for speech synthesis
+            system_message: System instructions for the assistant
+            functions: List of functions or dictionary with enabled_functions key
+            
+        Returns:
+            bool: True if update was successful, False otherwise
+        """
         if not self.is_connected or not self.ws:
             logger.error("Cannot update session: not connected")
             return False
-
+            
+        turn_detection = {
+            "type": "server_vad",
+            "threshold": 0.25,
+            "prefix_padding_ms": 200,
+            "silence_duration_ms": 300,
+            "create_response": True,
+        }
         tools = []
         tool_choice = "none"
-
+        
+        # Normalize function format
         if functions:
+            # Import function definitions
             from backend.utils.function_registry import FUNCTION_DEFINITIONS
-
+            
+            # Handle case when functions are in {enabled_functions: [...]} format
             if isinstance(functions, dict) and "enabled_functions" in functions:
                 enabled_functions = functions.get("enabled_functions", [])
+                
+                # Format for Realtime API
                 for func_name in enabled_functions:
+                    # Check if function exists in our definitions
                     if func_name in FUNCTION_DEFINITIONS:
+                        # Get function info from definitions
                         func_def = FUNCTION_DEFINITIONS[func_name]
                         tools.append({
                             "type": "function",
-                            "function": {
-                                "name": func_name,
-                                "description": func_def.get("description", f"Function {func_name}"),
-                                "parameters": func_def.get("parameters", {
-                                    "type": "object",
-                                    "properties": {},
-                                    "required": []
-                                })
-                            }
+                            "name": func_name,
+                            "description": func_def.get("description", f"Function {func_name}"),
+                            "parameters": func_def.get("parameters", {
+                                "type": "object",
+                                "properties": {},
+                                "required": []
+                            })
                         })
             else:
+                # Handle case when functions are already in the right format
                 for func in functions:
                     func_name = func.get("name")
                     if func_name:
                         tools.append({
                             "type": "function",
-                            "function": {
-                                "name": func_name,
-                                "description": func.get("description", f"Function {func_name}"),
-                                "parameters": func.get("parameters", {
-                                    "type": "object",
-                                    "properties": {},
-                                    "required": []
-                                })
-                            }
-                        })
-
-        if tools:
-            tool_choice = "auto"
-
-        payload = {
-            "type": "session.update",
-            "data": {
-                "instructions": system_message,
-                "voice": voice,
-                "capabilities": ["audio", "text", "voice_transcription"],
-                "tools": tools,
-                "tool_choice": tool_choice
-            }
-        }
-
-        try:
-            logger.info(f"Sending update with payload: {json.dumps(payload)[:200]}...")
-            await self.ws.send(json.dumps(payload))
-            logger.info(f"Session settings sent (voice={voice}, tools={len(tools)})")
-
-            response = await asyncio.wait_for(self.ws.recv(), timeout=5)
-            response_data = json.loads(response)
-            logger.info(f"Response after update: {json.dumps(response_data)}")
-
-            if response_data.get("type") == "session.updated":
-                logger.info("Session updated successfully")
-            elif response_data.get("type") == "error":
-                error_message = response_data.get("data", {}).get("message", "Unknown error")
-                logger.error(f"Error updating session: {error_message}")
-            else:
-                logger.warning(f"Unexpected response after session.update: {response_data.get('type')}")
-
-            if self.db_session:
-                try:
-                    conv = Conversation(
-                        assistant_id=self.assistant_config.id,
-                        session_id=self.session_id,
-                        user_message="",
-                        assistant_message="",
-                    )
-                    self.db_session.add(conv)
-                    self.db_session.commit()
-                    self.db_session.refresh(conv)
-                    self.conversation_record_id = str(conv.id)
-                    logger.info(f"Created conversation record: {self.conversation_record_id}")
-                except Exception as e:
-                    logger.error(f"Error creating Conversation in DB: {e}")
-
-            return True
-        except Exception as e:
-            logger.error(f"Error sending session.update: {e}")
-            return False
-
-    # Остальная логика оставлена без изменений
-
-                # Handle case when functions are already in the right format
-for func in functions:
-                    func_name = func.get("name")
-                    if func_name:
-                        tools.append({
-                            "type": "function",
-                            "function": {
-                                "name": func_name,
-                                "description": func.get("description", f"Function {func_name}"),
-                                "parameters": func.get("parameters", {
-                                    "type": "object",
-                                    "properties": {},
-                                    "required": []
-                                })
-                            }
+                            "name": func_name,
+                            "description": func.get("description", f"Function {func_name}"),
+                            "parameters": func.get("parameters", {
+                                "type": "object",
+                                "properties": {},
+                                "required": []
+                            })
                         })
         
         # Set tool_choice
         if tools:
             tool_choice = "auto"  # Allow model to decide when to call functions
             
-        # Согласно документации Microsoft и OpenAI
-        # https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/realtime-audio-websockets
-        # Строим правильный формат сообщения
         payload = {
-            "type": "update",
-            "data": {
-                "instructions": system_message,
+            "type": "session.update",
+            "session": {
+                "turn_detection": turn_detection,
+                "input_audio_format": "pcm16",
+                "output_audio_format": "pcm16",
                 "voice": voice,
+                "instructions": system_message,
+                "modalities": ["text", "audio"],
+                "temperature": 0.7,
+                "max_response_output_tokens": 500,
                 "tools": tools,
-                "tool_choice": tool_choice if tools else "none"
+                "tool_choice": tool_choice
             }
         }
-        
         try:
-            logger.info(f"Sending update with payload: {json.dumps(payload)[:200]}...")
             await self.ws.send(json.dumps(payload))
             logger.info(f"Session settings sent (voice={voice}, tools={len(tools)})")
-            
-            # Ожидаем ответ от сервера
-            response = await asyncio.wait_for(self.ws.recv(), timeout=5)
-            response_data = json.loads(response)
-            
-            # Логируем полный ответ для отладки
-            logger.info(f"Response after update: {json.dumps(response_data)}")
-            
-            # Проверяем ответ (может быть как session.updated, так и error)
-            if response_data.get("type") == "session.updated":
-                logger.info("Session updated successfully")
-            elif response_data.get("type") == "error":
-                error_message = response_data.get("data", {}).get("message", "Unknown error")
-                logger.error(f"Error updating session: {error_message}")
-                # Тем не менее, продолжаем - иногда API выдает ошибку, но сессия всё равно работает
-            else:
-                logger.warning(f"Unexpected response after session.update: {response_data.get('type')}")
-            
-            # Create a conversation record in the database if available
-            if self.db_session:
-                try:
-                    conv = Conversation(
-                        assistant_id=self.assistant_config.id,
-                        session_id=self.session_id,
-                        user_message="",
-                        assistant_message="",
-                    )
-                    self.db_session.add(conv)
-                    self.db_session.commit()
-                    self.db_session.refresh(conv)
-                    self.conversation_record_id = str(conv.id)
-                    logger.info(f"Created conversation record: {self.conversation_record_id}")
-                except Exception as e:
-                    logger.error(f"Error creating Conversation in DB: {e}")
-
-            return True
         except Exception as e:
             logger.error(f"Error sending session.update: {e}")
             return False
+
+        # Create a conversation record in the database if available
+        if self.db_session:
+            try:
+                conv = Conversation(
+                    assistant_id=self.assistant_config.id,
+                    session_id=self.session_id,
+                    user_message="",
+                    assistant_message="",
+                )
+                self.db_session.add(conv)
+                self.db_session.commit()
+                self.db_session.refresh(conv)
+                self.conversation_record_id = str(conv.id)
+                logger.info(f"Created conversation record: {self.conversation_record_id}")
+            except Exception as e:
+                logger.error(f"Error creating Conversation in DB: {e}")
+
+        return True
 
     async def handle_function_call(self, function_call_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -319,13 +278,10 @@ for func in functions:
             return False
         
         try:
-            # Обновляем формат сообщения согласно документации
             payload = {
-                "type": "tool_result",
-                "data": {
-                    "id": function_call_id,
-                    "result": result
-                }
+                "type": "function_call_output",
+                "function_call_id": function_call_id,
+                "content": result
             }
             
             await self.ws.send(json.dumps(payload))
@@ -349,14 +305,10 @@ for func in functions:
             return False
         try:
             data_b64 = base64.b64encode(audio_buffer).decode("utf-8")
-            
-            # Обновляем формат согласно документации
             await self.ws.send(json.dumps({
-                "type": "audio",
-                "data": {
-                    "audio": data_b64,
-                    "sequence": int(time.time() * 1000)  # Используем timestamp в качестве sequence number
-                }
+                "type": "input_audio_buffer.append",
+                "audio": data_b64,
+                "event_id": f"audio_{time.time()}"
             }))
             return True
         except ConnectionClosed:
@@ -377,10 +329,9 @@ for func in functions:
         if not self.is_connected or not self.ws:
             return False
         try:
-            # Обновляем формат согласно документации
             await self.ws.send(json.dumps({
-                "type": "audio_end",
-                "data": {}
+                "type": "input_audio_buffer.commit",
+                "event_id": f"commit_{time.time()}"
             }))
             return True
         except ConnectionClosed:
@@ -401,10 +352,9 @@ for func in functions:
         if not self.is_connected or not self.ws:
             return False
         try:
-            # Обновляем формат согласно документации
             await self.ws.send(json.dumps({
-                "type": "reset",
-                "data": {}
+                "type": "input_audio_buffer.clear",
+                "event_id": f"clear_{time.time()}"
             }))
             return True
         except ConnectionClosed:
@@ -421,11 +371,6 @@ for func in functions:
         """
         if self.ws:
             try:
-                # Отправляем сообщение о завершении сессии
-                await self.ws.send(json.dumps({
-                    "type": "end",
-                    "data": {}
-                }))
                 await self.ws.close()
                 logger.info(f"WebSocket connection closed for client {self.client_id}")
             except Exception as e:
