@@ -4,7 +4,6 @@ import uuid
 import base64
 import time
 import websockets
-import traceback
 from websockets.exceptions import ConnectionClosed
 
 from typing import Optional, List, Dict, Any, Union, AsyncGenerator
@@ -138,20 +137,14 @@ class OpenAIRealtimeClient:
         tools = []
         tool_choice = "none"
         
-        # Добавим инструкцию про функции в системный промпт если они есть
-        function_instructions = ""
-        
         # Normalize function format
         if functions:
             # Import function definitions
             from backend.utils.function_registry import FUNCTION_DEFINITIONS
             
             # Handle case when functions are in {enabled_functions: [...]} format
-            if isinstance(functions, dict) and 'enabled_functions' in functions:
+            if isinstance(functions, dict) and "enabled_functions" in functions:
                 enabled_functions = functions.get("enabled_functions", [])
-                
-                if "send_webhook" in enabled_functions:
-                    function_instructions = "\nВы можете использовать функцию send_webhook для отправки данных на внешний сервер. Когда пользователь просит отправить данные или сделать запрос, используйте эту функцию. Например, если пользователь говорит 'отправь эти данные на вебхук', вызовите функцию send_webhook с нужными параметрами."
                 
                 # Format for Realtime API
                 for func_name in enabled_functions:
@@ -185,15 +178,12 @@ class OpenAIRealtimeClient:
                             })
                         })
         
-        # Добавляем инструкции о функциях в системный промпт
-        if function_instructions:
-            system_message += function_instructions
-        
         # Set tool_choice
         if tools:
             tool_choice = "auto"  # Allow model to decide when to call functions
-            
+        
         # Включение транскрипции аудио в соответствии с документацией OpenAI
+        # Но без изменения существующего формата
         input_audio_transcription = {
             "model": "whisper-1"
         }
@@ -214,17 +204,9 @@ class OpenAIRealtimeClient:
                 "input_audio_transcription": input_audio_transcription
             }
         }
-        
-        # Логируем полную конфигурацию для отладки
-        try:
-            config_dump = json.dumps(payload, indent=2, ensure_ascii=False)
-            logger.info(f"Sending session configuration:\n{config_dump}")
-        except:
-            logger.info(f"Sending session configuration with {len(tools)} tools and tool_choice={tool_choice}")
-        
         try:
             await self.ws.send(json.dumps(payload))
-            logger.info(f"Session settings sent (voice={voice}, tools={len(tools)}, tool_choice={tool_choice})")
+            logger.info(f"Session settings sent (voice={voice}, tools={len(tools)})")
         except Exception as e:
             logger.error(f"Error sending session.update: {e}")
             return False
@@ -259,31 +241,20 @@ class OpenAIRealtimeClient:
             Dict: Result of the function execution
         """
         try:
-            from backend.utils.function_registry import execute_function, FUNCTION_DEFINITIONS
+            from backend.utils.function_registry import execute_function
             
-            # Логируем все данные для отладки
-            logger.info(f"Processing function call data: {json.dumps(function_call_data, ensure_ascii=False)}")
-            
-            # Извлекаем данные в формате Realtime API
             function_name = function_call_data.get("function", {}).get("name")
             arguments = function_call_data.get("function", {}).get("arguments", {})
             
-            # В Realtime API, arguments могут быть переданы как строка JSON
+            # If arguments are in string format (JSON), convert to dictionary
             if isinstance(arguments, str):
                 try:
                     arguments = json.loads(arguments)
-                    logger.info(f"Parsed arguments from JSON string: {arguments}")
                 except json.JSONDecodeError:
                     logger.warning(f"Failed to parse function arguments as JSON: {arguments}")
                     arguments = {}
             
-            # Добавляем значения из системных инструкций, если возможно
-            if function_name == "send_webhook" and isinstance(arguments, dict):
-                # Оставляем проверки по обязательным параметрам внутри самой функции,
-                # так как там реализовано извлечение из системных инструкций
-                pass
-            
-            logger.info(f"Executing function: {function_name} with arguments: {arguments}")
+            logger.info(f"Processing function call: {function_name} with arguments: {arguments}")
             
             # Execute the function
             result = await execute_function(
@@ -293,11 +264,9 @@ class OpenAIRealtimeClient:
                 client_id=self.client_id
             )
             
-            logger.info(f"Function execution result: {result}")
             return result
         except Exception as e:
             logger.error(f"Error processing function call: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
             return {"error": str(e)}
 
     async def send_function_result(self, function_call_id: str, result: Dict[str, Any]) -> bool:
@@ -322,7 +291,6 @@ class OpenAIRealtimeClient:
                 "content": result
             }
             
-            logger.info(f"Sending function result for call ID {function_call_id}: {json.dumps(result, ensure_ascii=False)}")
             await self.ws.send(json.dumps(payload))
             logger.info(f"Function result sent: {function_call_id}")
             return True
