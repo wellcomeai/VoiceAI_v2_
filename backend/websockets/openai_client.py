@@ -195,6 +195,31 @@ class OpenAIRealtimeClient:
             logger.error(f"Failed to connect to OpenAI: {e}")
             return False
 
+    async def reconnect(self) -> bool:
+        """
+        Пытается переподключиться к OpenAI Realtime API после потери соединения.
+        
+        Returns:
+            bool: True если переподключение успешно, False иначе
+        """
+        logger.info(f"Попытка переподключения к OpenAI для клиента {self.client_id}")
+        try:
+            # Закрываем старое соединение, если оно ещё существует
+            if self.ws:
+                try:
+                    await self.ws.close()
+                except:
+                    pass
+            
+            self.is_connected = False
+            self.ws = None
+            
+            # Подключаемся заново
+            return await self.connect()
+        except Exception as e:
+            logger.error(f"Ошибка при переподключении к OpenAI: {e}")
+            return False
+
     async def update_session(
         self,
         voice: str = DEFAULT_VOICE,
@@ -350,7 +375,7 @@ class OpenAIRealtimeClient:
 
     async def send_function_result(self, function_call_id: str, result: Dict[str, Any]) -> bool:
         """
-        Send the result of a function execution back to OpenAI.
+        Send the result of a function execution back to OpenAI using the correct API format.
         
         Args:
             function_call_id: ID of the function call
@@ -364,14 +389,25 @@ class OpenAIRealtimeClient:
             return False
         
         try:
+            # В Realtime API вместо function_call_output нужно использовать conversation.item.create
+            # с типом tool_result
             payload = {
-                "type": "function_call_output",
-                "function_call_id": function_call_id,
-                "content": result
+                "type": "conversation.item.create",
+                "item": {
+                    "role": "tool",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_call_id": function_call_id,
+                            "content": result
+                        }
+                    ]
+                }
             }
             
+            logger.info(f"Отправка результата функции: {function_call_id} через conversation.item.create")
             await self.ws.send(json.dumps(payload))
-            logger.info(f"Function result sent: {function_call_id}")
+            logger.info(f"Результат функции отправлен: {function_call_id}")
             return True
         except Exception as e:
             logger.error(f"Error sending function result: {e}")
