@@ -404,7 +404,7 @@ class OpenAIRealtimeClient:
         
         try:
             # Формируем событие для добавления в историю разговора результата функции
-            # согласно указанному формату с корректным item.type
+            # с обязательным полем call_id для связи с вызовом функции
             payload = {
                 "type": "conversation.item.create",          # клиентский event для добавления Item
                 "event_id": f"funcres_{time.time()}",
@@ -412,7 +412,8 @@ class OpenAIRealtimeClient:
                     "id": str(uuid.uuid4()),
                     "type": "function_call_output",          # корректное значение согласно ошибке
                     "role": "assistant",                     # для результатов функций используем assistant
-                    "name": function_call_id,                # связывает Item с вызовом функции
+                    "call_id": function_call_id,             # обязательное поле связи с вызовом функции
+                    "name": self.last_function_name or function_call_id,  # используем имя функции если доступно
                     "content": [
                         {
                             "type": "tool_result",           # соответствует схеме content для результатов функций
