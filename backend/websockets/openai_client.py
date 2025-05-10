@@ -17,8 +17,6 @@ logger = get_logger(__name__)
 
 DEFAULT_VOICE = "alloy"
 DEFAULT_SYSTEM_MESSAGE = "You are a helpful voice assistant."
-MIN_AUDIO_LENGTH_BYTES = 1600  # примерно 100мс аудио при 16kHz, mono, 16-bit
-INACTIVITY_TIMEOUT = 30  # секунды неактивности до закрытия сессии
 
 class OpenAIRealtimeClient:
     """
@@ -51,11 +49,6 @@ class OpenAIRealtimeClient:
         self.openai_url = settings.REALTIME_WS_URL
         self.session_id = str(uuid.uuid4())
         self.conversation_record_id: Optional[str] = None
-        self.audio_buffer_size = 0
-        self.response_in_progress = False
-        self.session_ended = False
-        self.inactivity_timer = None
-        self.last_activity_time = time.time()
 
     async def connect(self) -> bool:
         """
@@ -88,29 +81,12 @@ class OpenAIRealtimeClient:
                 timeout=30
             )
             self.is_connected = True
-            logger.info(f"Connected to OpenAI for client {self.client_id}, session: {self.session_id}")
+            logger.info(f"Connected to OpenAI for client {self.client_id}")
 
             # Fetch fresh settings from assistant_config
             voice = self.assistant_config.voice or DEFAULT_VOICE
             system_message = getattr(self.assistant_config, "system_prompt", None) or DEFAULT_SYSTEM_MESSAGE
             functions = getattr(self.assistant_config, "functions", None)
-
-            # Create a conversation record in the database if available
-            if self.db_session:
-                try:
-                    conv = Conversation(
-                        assistant_id=self.assistant_config.id,
-                        session_id=self.session_id,
-                        user_message="",
-                        assistant_message="",
-                    )
-                    self.db_session.add(conv)
-                    self.db_session.commit()
-                    self.db_session.refresh(conv)
-                    self.conversation_record_id = str(conv.id)
-                    logger.info(f"Created conversation record: {self.conversation_record_id} for session: {self.session_id}")
-                except Exception as e:
-                    logger.error(f"Error creating Conversation in DB: {e}")
 
             # Send updated session settings with actual system_prompt
             if not await self.update_session(
@@ -118,7 +94,7 @@ class OpenAIRealtimeClient:
                 system_message=system_message,
                 functions=functions
             ):
-                logger.error(f"Failed to update session settings for session: {self.session_id}")
+                logger.error("Failed to update session settings")
                 await self.close()
                 return False
 
@@ -223,11 +199,29 @@ class OpenAIRealtimeClient:
         }
         try:
             await self.ws.send(json.dumps(payload))
-            logger.info(f"Session settings sent for session: {self.session_id} (voice={voice}, tools={len(tools)})")
-            return True
+            logger.info(f"Session settings sent (voice={voice}, tools={len(tools)})")
         except Exception as e:
             logger.error(f"Error sending session.update: {e}")
             return False
+
+        # Create a conversation record in the database if available
+        if self.db_session:
+            try:
+                conv = Conversation(
+                    assistant_id=self.assistant_config.id,
+                    session_id=self.session_id,
+                    user_message="",
+                    assistant_message="",
+                )
+                self.db_session.add(conv)
+                self.db_session.commit()
+                self.db_session.refresh(conv)
+                self.conversation_record_id = str(conv.id)
+                logger.info(f"Created conversation record: {self.conversation_record_id}")
+            except Exception as e:
+                logger.error(f"Error creating Conversation in DB: {e}")
+
+        return True
 
     async def handle_function_call(self, function_call_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -253,7 +247,7 @@ class OpenAIRealtimeClient:
                     logger.warning(f"Failed to parse function arguments as JSON: {arguments}")
                     arguments = {}
             
-            logger.info(f"Processing function call: {function_name} with arguments: {arguments} for session: {self.session_id}")
+            logger.info(f"Processing function call: {function_name} with arguments: {arguments}")
             
             # Execute the function
             result = await execute_function(
@@ -291,38 +285,26 @@ class OpenAIRealtimeClient:
             }
             
             await self.ws.send(json.dumps(payload))
-            logger.info(f"Function result sent: {function_call_id} for session: {self.session_id}")
+            logger.info(f"Function result sent: {function_call_id}")
             return True
         except Exception as e:
             logger.error(f"Error sending function result: {e}")
             return False
 
-    async def process_audio(self, audio_chunk: bytes) -> bool:
+    async def process_audio(self, audio_buffer: bytes) -> bool:
         """
         Process and send audio data to the OpenAI API.
         
         Args:
-            audio_chunk: Binary audio data in PCM16 format
+            audio_buffer: Binary audio data in PCM16 format
             
         Returns:
             bool: True if successful, False otherwise
         """
-        if not self.is_connected or not self.ws or not audio_chunk or self.session_ended:
-            if self.session_ended:
-                logger.warning(f"Ignoring audio chunk for ended session: {self.session_id}")
+        if not self.is_connected or not self.ws or not audio_buffer:
             return False
-            
         try:
-            # Обновить время последней активности
-            self.last_activity_time = time.time()
-            
-            # Отслеживаем размер буфера
-            chunk_size = len(audio_chunk)
-            self.audio_buffer_size += chunk_size
-            
-            logger.debug(f"Adding {chunk_size} bytes to audio buffer, total: {self.audio_buffer_size} bytes, session: {self.session_id}")
-            
-            data_b64 = base64.b64encode(audio_chunk).decode("utf-8")
+            data_b64 = base64.b64encode(audio_buffer).decode("utf-8")
             await self.ws.send(json.dumps({
                 "type": "input_audio_buffer.append",
                 "audio": data_b64,
@@ -330,7 +312,7 @@ class OpenAIRealtimeClient:
             }))
             return True
         except ConnectionClosed:
-            logger.error(f"Connection closed while sending audio data for session: {self.session_id}")
+            logger.error("Connection closed while sending audio data")
             self.is_connected = False
             return False
         except Exception as e:
@@ -345,33 +327,15 @@ class OpenAIRealtimeClient:
             bool: True if successful, False otherwise
         """
         if not self.is_connected or not self.ws:
-            logger.warning(f"Cannot commit audio: not connected, session: {self.session_id}")
             return False
-            
-        if self.session_ended:
-            logger.warning(f"Cannot commit audio: session already ended, session: {self.session_id}")
-            return False
-            
-        # Проверка размера буфера: 16-битный PCM, 16KHz
-        # 1600 байт ~ 100мс (минимальное требование OpenAI)
-        if self.audio_buffer_size < MIN_AUDIO_LENGTH_BYTES:
-            logger.warning(f"Audio buffer too small to commit ({self.audio_buffer_size} bytes, need at least {MIN_AUDIO_LENGTH_BYTES} bytes) for session: {self.session_id}")
-            return False
-            
         try:
-            # Обновить время последней активности
-            self.last_activity_time = time.time()
-            
             await self.ws.send(json.dumps({
                 "type": "input_audio_buffer.commit",
                 "event_id": f"commit_{time.time()}"
             }))
-            logger.info(f"Audio buffer committed ({self.audio_buffer_size} bytes) for session: {self.session_id}")
-            # Сбрасываем счетчик размера буфера
-            self.audio_buffer_size = 0
             return True
         except ConnectionClosed:
-            logger.error(f"Connection closed while committing audio for session: {self.session_id}")
+            logger.error("Connection closed while committing audio")
             self.is_connected = False
             return False
         except Exception as e:
@@ -387,115 +351,52 @@ class OpenAIRealtimeClient:
         """
         if not self.is_connected or not self.ws:
             return False
-            
-        if self.session_ended:
-            logger.warning(f"Cannot clear audio buffer: session already ended, session: {self.session_id}")
-            return False
-            
         try:
-            # Обновить время последней активности
-            self.last_activity_time = time.time()
-            
             await self.ws.send(json.dumps({
                 "type": "input_audio_buffer.clear",
                 "event_id": f"clear_{time.time()}"
             }))
-            # Сбрасываем счетчик размера буфера
-            self.audio_buffer_size = 0
-            logger.info(f"Audio buffer cleared for session: {self.session_id}")
             return True
         except ConnectionClosed:
-            logger.error(f"Connection closed while clearing audio buffer for session: {self.session_id}")
+            logger.error("Connection closed while clearing audio buffer")
             self.is_connected = False
             return False
         except Exception as e:
             logger.error(f"Error clearing audio buffer: {e}")
             return False
 
-    async def cancel_response(self) -> bool:
-        """
-        Cancel the current response if it is in progress.
-        
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        if not self.is_connected or not self.ws:
-            return False
-            
-        if self.session_ended:
-            logger.warning(f"Cannot cancel response: session already ended, session: {self.session_id}")
-            return False
-            
-        if not self.response_in_progress:
-            logger.warning(f"No active response to cancel for session: {self.session_id}")
-            return False
-            
-        try:
-            # Обновить время последней активности
-            self.last_activity_time = time.time()
-            
-            await self.ws.send(json.dumps({
-                "type": "response.cancel",
-                "event_id": f"cancel_{time.time()}"
-            }))
-            logger.info(f"Response cancellation requested for session: {self.session_id}")
-            return True
-        except ConnectionClosed:
-            logger.error(f"Connection closed while cancelling response for session: {self.session_id}")
-            self.is_connected = False
-            return False
-        except Exception as e:
-            logger.error(f"Error cancelling response: {e}")
-            return False
-    
-    async def start_inactivity_timer(self):
-        """
-        Start a timer to close the session if no activity is detected.
-        """
-        if self.inactivity_timer:
-            self.inactivity_timer.cancel()
-            
-        self.inactivity_timer = asyncio.create_task(self._check_inactivity())
-    
-    async def _check_inactivity(self):
-        """
-        Check for inactivity and close the session if needed.
-        """
-        try:
-            await asyncio.sleep(INACTIVITY_TIMEOUT)
-            current_time = time.time()
-            elapsed = current_time - self.last_activity_time
-            
-            if elapsed >= INACTIVITY_TIMEOUT and not self.session_ended:
-                logger.info(f"Session inactive for {elapsed:.1f}s, closing due to inactivity: {self.session_id}")
-                await self.close()
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"Error in inactivity check: {e}")
-            
-    def end_session(self):
-        """
-        Mark the session as ended to prevent further operations.
-        """
-        if not self.session_ended:
-            self.session_ended = True
-            logger.info(f"Session marked as ended: {self.session_id}")
-            
-            # Cancel inactivity timer if exists
-            if self.inactivity_timer:
-                self.inactivity_timer.cancel()
-                self.inactivity_timer = None
-
     async def close(self) -> None:
         """
         Close the WebSocket connection.
         """
-        self.end_session()
         if self.ws:
             try:
                 await self.ws.close()
-                logger.info(f"WebSocket connection closed for client {self.client_id}, session: {self.session_id}")
+                logger.info(f"WebSocket connection closed for client {self.client_id}")
             except Exception as e:
                 logger.error(f"Error closing OpenAI WebSocket: {e}")
         self.is_connected = False
+
+    async def receive_messages(self) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Receive and yield messages from the OpenAI WebSocket.
+        
+        Yields:
+            Dict: Message received from the OpenAI WebSocket
+        """
+        if not self.is_connected or not self.ws:
+            return
+            
+        try:
+            async for message in self.ws:
+                try:
+                    data = json.loads(message)
+                    yield data
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to decode message: {message[:100]}...")
+        except ConnectionClosed:
+            logger.info(f"WebSocket connection closed for client {self.client_id}")
+            self.is_connected = False
+        except Exception as e:
+            logger.error(f"Error receiving messages: {e}")
+            self.is_connected = False
