@@ -197,9 +197,13 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
     function_result = None
     
     # Переменные для сбора текста
-    current_transcript = ""
     collecting_user_input = False
-    last_item_type = None
+    last_item_id = None
+    last_item_role = None
+    
+    # Флаги для отслеживания состояния разговора
+    user_speech_active = False
+    current_user_message_id = None
     
     try:
         logger.info(f"[DEBUG] Начало обработки сообщений от OpenAI для клиента {openai_client.client_id}")
@@ -211,16 +215,46 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
             msg_type = response_data.get("type", "unknown")
             logger.info(f"[DEBUG] Получено сообщение от OpenAI: тип={msg_type}")
             
+            # Полное логирование для событий транскрипции
+            if "transcription" in msg_type or "transcript" in msg_type:
+                try:
+                    logger.info(f"[DEBUG-TRANS] {msg_type}: {json.dumps(response_data, ensure_ascii=False)[:500]}")
+                except:
+                    logger.info(f"[DEBUG-TRANS] {msg_type}: {str(response_data)[:500]}")
+            
             # Обработка начала ввода пользователя
             if msg_type == "input_audio_buffer.speech_started":
+                user_speech_active = True
                 collecting_user_input = True
-                current_transcript = ""
+                current_user_message_id = response_data.get("item_id")
+                logger.info(f"[DEBUG] Начало речи пользователя, item_id={current_user_message_id}")
+            
+            # Обработка события дельта-транскрипции пользовательского ввода
+            if msg_type == "conversation.item.input_audio_transcription.delta":
+                delta_text = response_data.get("delta", "")
+                item_id = response_data.get("item_id", "")
                 
-            # Обработка события транскрипции
+                logger.info(f"[DEBUG] Дельта транскрипции пользователя: '{delta_text}', item_id={item_id}")
+                
+                # Проверяем, соответствует ли item_id текущему сообщению пользователя
+                if user_speech_active and (not current_user_message_id or item_id == current_user_message_id):
+                    if not user_transcript and delta_text:
+                        user_transcript = delta_text
+                    else:
+                        user_transcript += delta_text
+                    
+                    logger.info(f"[DEBUG] Обновлена пользовательская транскрипция: '{user_transcript}'")
+            
+            # Обработка события полной транскрипции пользовательского ввода
             if msg_type == "conversation.item.input_audio_transcription.completed":
-                if "transcript" in response_data:
-                    user_transcript = response_data.get("transcript", "")
-                    logger.info(f"[DEBUG] Полная транскрипция пользователя: '{user_transcript}'")
+                item_id = response_data.get("item_id", "")
+                transcript = response_data.get("transcript", "")
+                
+                logger.info(f"[DEBUG] Полная транскрипция пользователя: '{transcript}', item_id={item_id}")
+                
+                # Обновляем транскрипцию пользователя, если она не пуста
+                if transcript and (not current_user_message_id or item_id == current_user_message_id):
+                    user_transcript = transcript
                     
                     # Сохраняем сообщение пользователя в БД
                     if openai_client.db_session and openai_client.conversation_record_id:
@@ -231,53 +265,68 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                             if conv:
                                 conv.user_message = user_transcript
                                 openai_client.db_session.commit()
-                                logger.info(f"[DEBUG] Сохранено сообщение пользователя в БД")
+                                logger.info(f"[DEBUG] Сохранено сообщение пользователя в БД: '{user_transcript}'")
                         except Exception as e:
                             logger.error(f"[DEBUG] Ошибка сохранения в БД: {str(e)}")
             
             # Обработка частей транскрипции и построение полного текста
             if msg_type == "response.audio_transcript.delta":
                 delta_text = response_data.get("delta", "")
+                item_id = response_data.get("item_id", "")
                 
-                # Печатаем больше информации для отладки
-                logger.info(f"[DEBUG] Delta текст: '{delta_text}', index: {response_data.get('index')}, is_final: {response_data.get('is_final')}")
+                # Логируем для отладки
+                logger.info(f"[DEBUG] Delta текст: '{delta_text}', item_id={item_id}, user_speech_active={user_speech_active}")
                 
-                # Собираем транскрипцию на основе индекса (0 обычно для пользователя, 1 для ассистента)
-                if "index" in response_data:
-                    if response_data.get("index") == 0:
-                        if not user_transcript and delta_text:
-                            user_transcript = delta_text
-                        else:
-                            user_transcript += delta_text
-                        logger.info(f"[DEBUG] Обновлена транскрипция пользователя: '{user_transcript}'")
-                    else:
-                        if not assistant_transcript and delta_text:
-                            assistant_transcript = delta_text
-                        else:
-                            assistant_transcript += delta_text
-                        logger.info(f"[DEBUG] Обновлена транскрипция ассистента: '{assistant_transcript}'")
-                else:
-                    # Если нет индекса, предположим, что это продолжение последней транскрипции
-                    if collecting_user_input:
-                        user_transcript += delta_text
+                # Определяем, кому принадлежит транскрипция
+                is_assistant = not user_speech_active
+                
+                # Если есть явный признак сообщения ассистента (например, префикс item_id)
+                if item_id and ("assistant" in item_id.lower() or "msg_" in item_id.lower()):
+                    is_assistant = True
+                
+                logger.info(f"[DEBUG] Определено как: {'ассистент' if is_assistant else 'пользователь'}")
+                
+                # Обновляем соответствующую транскрипцию
+                if is_assistant:
+                    if not assistant_transcript and delta_text:
+                        assistant_transcript = delta_text
                     else:
                         assistant_transcript += delta_text
+                    logger.info(f"[DEBUG] Обновлена транскрипция ассистента: '{assistant_transcript}'")
+                else:
+                    if not user_transcript and delta_text:
+                        user_transcript = delta_text
+                    else:
+                        user_transcript += delta_text
+                    logger.info(f"[DEBUG] Обновлена транскрипция пользователя: '{user_transcript}'")
             
-            # Получение завершенной транскрипции
+            # Обработка создания элемента разговора
             if msg_type == "conversation.item.created":
-                content = response_data.get("content", {})
-                if "input" in content and "text" in content.get("input", {}):
-                    user_transcript = content.get("input", {}).get("text", "")
-                    logger.info(f"[DEBUG] Из conversation.item.created получена транскрипция пользователя: '{user_transcript}'")
-                elif "output" in content:
-                    output_content = content.get("output", [])[0] if content.get("output", []) else {}
-                    if isinstance(output_content, dict) and "text" in output_content:
-                        assistant_transcript = output_content.get("text", "")
-                        logger.info(f"[DEBUG] Из conversation.item.created получен текст ассистента: '{assistant_transcript}'")
+                item = response_data.get("item", {})
+                item_id = item.get("id", "")
+                role = item.get("role", "")
+                
+                logger.info(f"[DEBUG] Создан элемент разговора: id={item_id}, role={role}")
+                
+                # Сохраняем информацию о последнем элементе
+                last_item_id = item_id
+                last_item_role = role
+                
+                # Если это сообщение пользователя, пытаемся извлечь транскрипцию
+                if role == "user":
+                    content = item.get("content", [])
+                    for part in content:
+                        if part.get("type") == "input_audio" or part.get("type") == "input_text":
+                            part_transcript = part.get("transcript", part.get("text", ""))
+                            if part_transcript:
+                                user_transcript = part_transcript
+                                logger.info(f"[DEBUG] Извлечена транскрипция пользователя из item: '{user_transcript}'")
             
-            # Завершение ввода пользователя
+            # Обработка события окончания речи пользователя
             if msg_type == "input_audio_buffer.speech_stopped":
+                user_speech_active = False
                 collecting_user_input = False
+                logger.info(f"[DEBUG] Окончание речи пользователя. Транскрипция: '{user_transcript}'")
             
             # Обработка вызова функции
             if msg_type == "function_call":
@@ -398,6 +447,10 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                     
                     # Сбрасываем результат функции после логирования
                     function_result = None
+                    
+                    # Сбрасываем переменные сообщений для нового диалога
+                    user_transcript = ""
+                    assistant_transcript = ""
                 else:
                     logger.info(f"[DEBUG] Запись в Google Sheet пропущена - sheet_id не настроен")
 
