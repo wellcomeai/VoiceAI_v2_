@@ -2,6 +2,7 @@ import json
 import inspect
 import asyncio
 import importlib.util
+import re
 from typing import Dict, Any, Callable, Optional, List
 import sys
 
@@ -77,10 +78,45 @@ def get_enabled_functions(assistant_functions: List[Dict[str, Any]]) -> List[Dic
     # Преобразуем формат для OpenAI API
     for func in assistant_functions:
         function_name = func.get("name")
-        if function_name in FUNCTION_DEFINITIONS:
-            enabled_functions.append(FUNCTION_DEFINITIONS[function_name])
+        # Нормализуем имя функции (учитываем camelCase и snake_case)
+        if function_name:
+            if function_name in FUNCTION_DEFINITIONS:
+                enabled_functions.append(FUNCTION_DEFINITIONS[function_name])
+            elif function_name.lower() == "sendwebhook" and "send_webhook" in FUNCTION_DEFINITIONS:
+                enabled_functions.append(FUNCTION_DEFINITIONS["send_webhook"])
+            elif function_name.lower() == "webhook" and "send_webhook" in FUNCTION_DEFINITIONS:
+                enabled_functions.append(FUNCTION_DEFINITIONS["send_webhook"])
     
     return enabled_functions
+
+def extract_webhook_url_from_prompt(prompt: str) -> Optional[str]:
+    """
+    Извлекает URL вебхука из системного промпта ассистента.
+    
+    Args:
+        prompt: Системный промпт ассистента
+        
+    Returns:
+        Найденный URL или None
+    """
+    if not prompt:
+        return None
+        
+    # Ищем URL с помощью регулярного выражения
+    # Паттерн 1: "URL вебхука: https://example.com"
+    pattern1 = r'URL\s+(?:вебхука|webhook):\s*(https?://[^\s"\'<>]+)'
+    # Паттерн 2: "webhook URL: https://example.com"
+    pattern2 = r'(?:вебхука|webhook)\s+URL:\s*(https?://[^\s"\'<>]+)'
+    # Паттерн 3: просто URL в тексте (менее точный)
+    pattern3 = r'https?://[^\s"\'<>]+'
+    
+    # Проверяем шаблоны по убыванию специфичности
+    for pattern in [pattern1, pattern2, pattern3]:
+        matches = re.findall(pattern, prompt, re.IGNORECASE)
+        if matches:
+            return matches[0]
+            
+    return None
 
 async def execute_function(
     function_name: str, 
@@ -100,11 +136,29 @@ async def execute_function(
     Returns:
         Результат выполнения функции
     """
+    # Нормализуем имя функции
+    if function_name and function_name.lower() == "sendwebhook":
+        function_name = "send_webhook"
+        logger.info(f"Нормализовано имя функции: sendWebHook -> send_webhook")
+    
     if function_name not in FUNCTION_REGISTRY:
         logger.error(f"Функция '{function_name}' не найдена в реестре")
         return {"error": f"Function '{function_name}' not found"}
     
     func = FUNCTION_REGISTRY[function_name]
+    
+    # Если это webhook и URL не указан, ищем его в промпте
+    if function_name == "send_webhook" and "url" not in arguments and assistant_config:
+        if hasattr(assistant_config, "system_prompt") and assistant_config.system_prompt:
+            webhook_url = extract_webhook_url_from_prompt(assistant_config.system_prompt)
+            if webhook_url:
+                logger.info(f"Извлечен URL вебхука из промпта: {webhook_url}")
+                arguments["url"] = webhook_url
+    
+    # Если event не указан для webhook, используем значение по умолчанию
+    if function_name == "send_webhook" and "event" not in arguments:
+        arguments["event"] = "default_event"
+        logger.info(f"Добавлен параметр event по умолчанию: 'default_event'")
     
     try:
         # Проверяем, является ли функция асинхронной
@@ -264,11 +318,18 @@ async def send_webhook(args, assistant_config=None, client_id=None):
         event = args.get("event")
         payload = args.get("payload", {})
         
+        # Если нет URL, попробуем извлечь из промпта
+        if not url and assistant_config:
+            if hasattr(assistant_config, "system_prompt") and assistant_config.system_prompt:
+                url = extract_webhook_url_from_prompt(assistant_config.system_prompt)
+                logger.info(f"Извлечен URL вебхука из промпта: {url}")
+        
         if not url:
             return {"error": "URL is required"}
         
         if not event:
-            return {"error": "Event is required"}
+            event = "default_event"  # Устанавливаем значение по умолчанию
+            logger.info(f"Используем имя события по умолчанию: {event}")
             
         # Формируем данные для отправки
         data = {
@@ -285,7 +346,11 @@ async def send_webhook(args, assistant_config=None, client_id=None):
             data["client_id"] = client_id
         
         # Отправляем запрос с помощью доступных библиотек
-        return await send_http_request(url, data)
+        logger.info(f"Отправка webhook на URL: {url}, с событием: {event}")
+        result = await send_http_request(url, data)
+        logger.info(f"Результат отправки webhook: {result}")
+        
+        return result
         
     except Exception as e:
         logger.error(f"Ошибка при отправке вебхука: {e}")
