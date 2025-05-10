@@ -259,7 +259,7 @@ class OpenAIRealtimeClient:
             Dict: Result of the function execution
         """
         try:
-            from backend.utils.function_registry import execute_function
+            from backend.utils.function_registry import execute_function, FUNCTION_DEFINITIONS
             
             # Логируем все данные для отладки
             logger.info(f"Processing function call data: {json.dumps(function_call_data, ensure_ascii=False)}")
@@ -276,6 +276,12 @@ class OpenAIRealtimeClient:
                 except json.JSONDecodeError:
                     logger.warning(f"Failed to parse function arguments as JSON: {arguments}")
                     arguments = {}
+            
+            # Добавляем значения из системных инструкций, если возможно
+            if function_name == "send_webhook" and isinstance(arguments, dict):
+                # Оставляем проверки по обязательным параметрам внутри самой функции,
+                # так как там реализовано извлечение из системных инструкций
+                pass
             
             logger.info(f"Executing function: {function_name} with arguments: {arguments}")
             
