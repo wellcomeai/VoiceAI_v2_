@@ -182,6 +182,15 @@ class OpenAIRealtimeClient:
         if tools:
             tool_choice = "auto"  # Allow model to decide when to call functions
             
+        # ВАЖНО: Всегда включаем транскрипцию пользовательского ввода
+        input_audio_transcription = {
+            "model": "whisper-1",
+            "language": None,  # Автоопределение языка
+            "prompt": ""       # Необязательная подсказка для транскрипции
+        }
+        
+        logger.info(f"Настройка транскрипции пользовательского ввода: {json.dumps(input_audio_transcription)}")
+            
         payload = {
             "type": "session.update",
             "session": {
@@ -194,12 +203,13 @@ class OpenAIRealtimeClient:
                 "temperature": 0.7,
                 "max_response_output_tokens": 500,
                 "tools": tools,
-                "tool_choice": tool_choice
+                "tool_choice": tool_choice,
+                "input_audio_transcription": input_audio_transcription  # Явно включаем транскрипцию
             }
         }
         try:
             await self.ws.send(json.dumps(payload))
-            logger.info(f"Session settings sent (voice={voice}, tools={len(tools)})")
+            logger.info(f"Session settings sent (voice={voice}, tools={len(tools)}, with input_audio_transcription)")
         except Exception as e:
             logger.error(f"Error sending session.update: {e}")
             return False
