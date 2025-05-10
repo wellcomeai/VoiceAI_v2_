@@ -196,6 +196,13 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
     assistant_transcript = ""
     function_result = None
     
+    # Для функций: накопление аргументов для streaming вызова функций
+    current_function_data = {
+        "name": None,
+        "call_id": None,
+        "arguments_buffer": ""
+    }
+    
     try:
         logger.info(f"[DEBUG] Начало обработки сообщений от OpenAI для клиента {openai_client.client_id}")
         while True:
@@ -271,13 +278,104 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                                 user_transcript = part_text
                                 logger.info(f"[DEBUG] Из conversation.item.created получен текст пользователя: '{user_transcript}'")
             
-            # Обработка вызова функции
+            # НОВАЯ ОБРАБОТКА ВЫЗОВА ФУНКЦИЙ - здесь мы обрабатываем потоковый вызов функций OpenAI Realtime API
+            
+            # Начало вызова функции - получаем имя и ID
+            if msg_type == "response.function_call.started":
+                function_name = response_data.get("function_name")
+                function_call_id = response_data.get("call_id")
+                
+                logger.info(f"[DEBUG] Начало вызова функции: {function_name}, ID: {function_call_id}")
+                
+                # Сбрасываем старые данные и запоминаем новые
+                current_function_data = {
+                    "name": function_name,
+                    "call_id": function_call_id,
+                    "arguments_buffer": ""
+                }
+                
+                # Отправляем уведомление клиенту о начале вызова
+                await websocket.send_json({
+                    "type": "function_call.started",
+                    "function": function_name,
+                    "function_call_id": function_call_id
+                })
+            
+            # Получение частей аргументов функции (потоковая передача)
+            if msg_type == "response.function_call_arguments.delta":
+                if current_function_data["name"]:
+                    delta = response_data.get("delta", "")
+                    current_function_data["arguments_buffer"] += delta
+                    logger.info(f"[DEBUG] Получена часть аргументов функции: '{delta}'")
+            
+            # Завершение получения аргументов и вызов функции
+            if msg_type == "response.function_call_arguments.done":
+                if current_function_data["name"] and current_function_data["call_id"]:
+                    function_name = current_function_data["name"]
+                    function_call_id = current_function_data["call_id"]
+                    arguments_str = response_data.get("arguments", current_function_data["arguments_buffer"])
+                    
+                    logger.info(f"[DEBUG] Получены все аргументы функции {function_name}: {arguments_str}")
+                    
+                    try:
+                        # Парсим аргументы из JSON-строки
+                        arguments = json.loads(arguments_str)
+                        
+                        # Сообщаем клиенту о выполнении функции
+                        await websocket.send_json({
+                            "type": "function_call.start",
+                            "function": function_name,
+                            "function_call_id": function_call_id
+                        })
+                        
+                        # Выполняем функцию
+                        result = await openai_client.handle_function_call({
+                            "function": {
+                                "name": function_name,
+                                "arguments": arguments
+                            }
+                        })
+                        
+                        # Сохраняем результат для логирования
+                        function_result = result
+                        
+                        # Отправляем результат обратно в OpenAI
+                        await openai_client.send_function_result(function_call_id, result)
+                        
+                        # Сообщаем клиенту о завершении
+                        await websocket.send_json({
+                            "type": "function_call.completed",
+                            "function": function_name,
+                            "function_call_id": function_call_id,
+                            "result": result
+                        })
+                    except json.JSONDecodeError as e:
+                        logger.error(f"[DEBUG] Ошибка при парсинге аргументов функции: {e}")
+                        await websocket.send_json({
+                            "type": "error",
+                            "error": {"code": "function_args_error", "message": f"Ошибка аргументов функции: {str(e)}"}
+                        })
+                    except Exception as e:
+                        logger.error(f"[DEBUG] Ошибка при выполнении функции: {e}")
+                        await websocket.send_json({
+                            "type": "error",
+                            "error": {"code": "function_execution_error", "message": f"Ошибка выполнения функции: {str(e)}"}
+                        })
+                    
+                    # Сбрасываем данные функции
+                    current_function_data = {
+                        "name": None,
+                        "call_id": None,
+                        "arguments_buffer": ""
+                    }
+
+            # Оставляем предыдущую обработку для обратной совместимости
             if msg_type == "function_call":
                 # Извлекаем данные вызова функции
                 function_call_id = response_data.get("function_call_id")
                 function_data = response_data.get("function", {})
                 
-                logger.info(f"[DEBUG] Получен вызов функции: {function_data.get('name')}, аргументы: {function_data.get('arguments')}")
+                logger.info(f"[DEBUG] Получен вызов функции (legacy): {function_data.get('name')}, аргументы: {function_data.get('arguments')}")
                 
                 # Сообщаем клиенту о том, что выполняется функция
                 await websocket.send_json({
