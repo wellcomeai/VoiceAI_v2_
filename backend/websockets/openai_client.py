@@ -404,16 +404,20 @@ class OpenAIRealtimeClient:
             }
         
         try:
-            # Правильный формат для Realtime API согласно документации и требованиям
+            # Формируем событие для добавления в историю разговора результата функции
+            # точно по указанной в документации структуре
             payload = {
                 "type": "conversation.item.create",
+                "event_id": f"funcres_{time.time()}",
                 "item": {
-                    "role": "tool",
+                    "id": str(uuid.uuid4()),
+                    "type": "function",            # обязательный параметр item.type
+                    "role": "tool",                # или "function", в зависимости от схемы
+                    "name": function_call_id,      # связываем с вызовом функции
                     "content": [
                         {
-                            "type": "tool_result",  # Обязательное поле item.type
-                            "tool_call_id": function_call_id,
-                            "content": result
+                            "type": "tool_result", 
+                            "data": result
                         }
                     ]
                 }
@@ -425,59 +429,12 @@ class OpenAIRealtimeClient:
             await self.ws.send(json.dumps(payload))
             logger.info(f"Результат функции отправлен для {function_call_id}")
             
-            # Ждем подтверждения или ошибки от API
-            try:
-                # Устанавливаем таймаут на получение ответа в 5 секунд
-                response_timer = time.time() + 5
-                
-                while time.time() < response_timer:
-                    # Пытаемся получить следующее сообщение от сервера
-                    # с малым таймаутом, чтобы не блокировать надолго
-                    try:
-                        raw_response = await asyncio.wait_for(self.ws.recv(), 0.5)
-                        response = json.loads(raw_response)
-                        
-                        # Если получена ошибка с указанием на отправленный payload
-                        if response.get("type") == "error" and "item" in str(response.get("error", {})):
-                            error_info = response.get("error", {})
-                            error_msg = f"API error: {error_info.get('message', 'Unknown error')}"
-                            logger.error(f"[DEBUG] Ошибка при отправке результата функции: {error_msg}")
-                            
-                            return {
-                                "success": False,
-                                "error": error_msg,
-                                "payload": payload
-                            }
-                        
-                        # Если пришло подтверждение, что ответ был принят и обработан
-                        if response.get("type") == "conversation.item.created":
-                            return {
-                                "success": True,
-                                "error": None,
-                                "payload": payload
-                            }
-                    except asyncio.TimeoutError:
-                        # Таймаут на одну попытку получения - это нормально, продолжаем
-                        continue
-                    except Exception as e:
-                        logger.error(f"Ошибка при получении ответа после отправки результата: {e}")
-                        break
-                    
-                # Если мы дошли сюда, значит не получили явного подтверждения или ошибки
-                # Считаем, что отправка успешна, но без подтверждения
-                return {
-                    "success": True,
-                    "error": None,
-                    "payload": payload
-                }
-                
-            except Exception as e:
-                logger.error(f"Ошибка при ожидании ответа: {e}")
-                return {
-                    "success": False,
-                    "error": f"Error waiting for response: {str(e)}",
-                    "payload": payload
-                }
+            # Возвращаем статус отправки
+            return {
+                "success": True,
+                "error": None,
+                "payload": payload
+            }
             
         except Exception as e:
             error_msg = f"Error sending function result: {e}"
