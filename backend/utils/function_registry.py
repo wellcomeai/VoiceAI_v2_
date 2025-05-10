@@ -5,6 +5,7 @@ import importlib.util
 from typing import Dict, Any, Callable, Optional, List
 import sys
 import traceback
+import re
 
 from backend.core.logging import get_logger
 logger = get_logger(__name__)
@@ -22,18 +23,18 @@ FUNCTION_DEFINITIONS = {
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "URL вебхука для отправки данных. Например: https://example.com/webhook"
+                    "description": "URL вебхука для отправки данных (если не указан, будет извлечен из системных инструкций)"
                 },
                 "event": {
                     "type": "string",
-                    "description": "Код события (например, 'booking', 'request', 'notification')"
+                    "description": "Код события (если не указан, будет извлечен из системных инструкций или использовано значение по умолчанию)"
                 },
                 "payload": {
                     "type": "object",
                     "description": "Произвольные данные для отправки. Например: {\"name\": \"John\", \"age\": 30}"
                 }
             },
-            "required": ["url", "event"]
+            "required": []  // URL и event могут быть извлечены из системных инструкций
         }
     }
 }
@@ -282,27 +283,50 @@ async def send_webhook(args, assistant_config=None, client_id=None):
     
     Args:
         args: Словарь аргументов:
-            - url: Полный URL вебхука
-            - event: Код события
+            - url: Полный URL вебхука (опционально, если указан в системных инструкциях)
+            - event: Код события (опционально, если указан в системных инструкциях)
             - payload: Произвольные данные (опционально)
             
     Returns:
         Результат выполнения вебхука
     """
     try:
+        # Извлечение URL и event из аргументов или системных инструкций
         url = args.get("url")
         event = args.get("event")
         payload = args.get("payload", {})
         
         logger.info(f"send_webhook вызван с аргументами: url={url}, event={event}, payload={payload}")
         
+        # Извлечение URL из системных инструкций, если он не указан в аргументах
+        if not url and assistant_config and hasattr(assistant_config, "system_prompt"):
+            system_prompt = assistant_config.system_prompt
+            
+            # Попытка найти URL в системных инструкциях с помощью регулярного выражения
+            url_match = re.search(r'https?://[^\s"\']+', system_prompt)
+            if url_match:
+                url = url_match.group(0)
+                logger.info(f"URL извлечен из системных инструкций: {url}")
+                
+        # Проверка обязательных параметров
         if not url:
             logger.error("URL is required for send_webhook")
-            return {"error": "URL is required"}
+            return {"error": "URL is required", "status": "error"}
+            
+        # Извлечение event из системных инструкций, если он не указан в аргументах
+        if not event and assistant_config and hasattr(assistant_config, "system_prompt"):
+            system_prompt = assistant_config.system_prompt
+            
+            # Попытка найти event в системных инструкциях
+            event_match = re.search(r'event\s*[-–—:]\s*(\w+(?:\s+\w+)*)', system_prompt)
+            if event_match:
+                event = event_match.group(1).strip()
+                logger.info(f"Event извлечен из системных инструкций: {event}")
         
         if not event:
-            logger.error("Event is required for send_webhook")
-            return {"error": "Event is required"}
+            # Значение event по умолчанию, если не удалось извлечь из инструкций
+            event = "webhook_triggered"
+            logger.info(f"Используется event по умолчанию: {event}")
             
         # Формируем данные для отправки
         data = {
@@ -337,4 +361,4 @@ async def send_webhook(args, assistant_config=None, client_id=None):
     except Exception as e:
         logger.error(f"Ошибка при отправке вебхука: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
-        return {"error": f"Webhook error: {str(e)}"}
+        return {"error": f"Webhook error: {str(e)}", "status": "error"}
