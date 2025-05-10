@@ -4,8 +4,6 @@ import asyncio
 import importlib.util
 from typing import Dict, Any, Callable, Optional, List
 import sys
-import traceback
-import re
 
 from backend.core.logging import get_logger
 logger = get_logger(__name__)
@@ -23,18 +21,18 @@ FUNCTION_DEFINITIONS = {
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "URL вебхука для отправки данных (если не указан, будет извлечен из системных инструкций)"
+                    "description": "URL вебхука для отправки данных"
                 },
                 "event": {
                     "type": "string",
-                    "description": "Код события (если не указан, будет извлечен из системных инструкций или использовано значение по умолчанию)"
+                    "description": "Код события (например, 'booking', 'request', 'notification')"
                 },
                 "payload": {
                     "type": "object",
-                    "description": "Произвольные данные для отправки. Например: {\"name\": \"John\", \"age\": 30}"
+                    "description": "Произвольные данные для отправки"
                 }
             },
-            "required": []  // URL и event могут быть извлечены из системных инструкций
+            "required": ["url", "event"]
         }
     }
 }
@@ -109,9 +107,6 @@ async def execute_function(
     func = FUNCTION_REGISTRY[function_name]
     
     try:
-        # Логируем детали выполнения функции
-        logger.info(f"Выполнение функции '{function_name}' с аргументами: {json.dumps(arguments, ensure_ascii=False)}")
-        
         # Проверяем, является ли функция асинхронной
         if inspect.iscoroutinefunction(func):
             result = await func(arguments, assistant_config, client_id)
@@ -122,13 +117,9 @@ async def execute_function(
                 None, lambda: func(arguments, assistant_config, client_id)
             )
         
-        # Логируем результат выполнения
-        logger.info(f"Результат выполнения функции '{function_name}': {json.dumps(result, ensure_ascii=False)}")
-        
         return result
     except Exception as e:
         logger.error(f"Ошибка выполнения функции '{function_name}': {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
         return {"error": str(e)}
 
 # Проверка доступности модулей
@@ -157,59 +148,44 @@ async def send_http_request(url, data, timeout=10):
     Returns:
         Результат запроса
     """
-    logger.info(f"Sending HTTP request to URL: {url}")
-    logger.info(f"Request data: {json.dumps(data, ensure_ascii=False)}")
-    
     # Пробуем использовать aiohttp
     if is_module_available("aiohttp"):
         import aiohttp
         try:
-            logger.info("Using aiohttp for the request")
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=data, timeout=timeout) as response:
                     response_text = await response.text()
-                    result = {
+                    return {
                         "status": response.status,
                         "message": "Webhook sent successfully",
                         "response": response_text[:200]  # Ограничиваем размер ответа
                     }
-                    logger.info(f"Request result: {json.dumps(result, ensure_ascii=False)}")
-                    return result
         except Exception as e:
             logger.error(f"Ошибка при отправке запроса через aiohttp: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
             # Если возникла ошибка, продолжаем с другими методами
     
     # Пробуем использовать requests
     if is_module_available("requests"):
         import requests
         try:
-            logger.info("Using requests for the request")
             # Выполняем синхронный запрос в отдельном потоке
             loop = asyncio.get_event_loop()
-            def make_request():
-                try:
-                    response = requests.post(
-                        url, 
-                        json=data,
-                        timeout=timeout,
-                        headers={"Content-Type": "application/json"}
-                    )
-                    return {
-                        "status": response.status_code,
-                        "message": "Webhook sent successfully",
-                        "response": response.text[:200]  # Ограничиваем размер ответа
-                    }
-                except Exception as e:
-                    logger.error(f"Error in requests.post: {e}")
-                    return {"error": str(e)}
-                    
-            result = await loop.run_in_executor(None, make_request)
-            logger.info(f"Request result: {json.dumps(result, ensure_ascii=False)}")
-            return result
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.post(
+                    url, 
+                    json=data,
+                    timeout=timeout,
+                    headers={"Content-Type": "application/json"}
+                )
+            )
+            return {
+                "status": response.status_code,
+                "message": "Webhook sent successfully",
+                "response": response.text[:200]  # Ограничиваем размер ответа
+            }
         except Exception as e:
             logger.error(f"Ошибка при отправке запроса через requests: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
             # Если возникла ошибка, продолжаем с другими методами
     
     # Запасной вариант: используем стандартную библиотеку urllib
@@ -218,7 +194,6 @@ async def send_http_request(url, data, timeout=10):
         import urllib.error
         import ssl
         
-        logger.info("Using urllib for the request")
         # Преобразуем данные в JSON
         data_json = json.dumps(data).encode('utf-8')
         
@@ -242,21 +217,18 @@ async def send_http_request(url, data, timeout=10):
             try:
                 with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
                     response_data = response.read().decode('utf-8')
-                    result = {
+                    return {
                         "status": response.status,
                         "message": "Webhook sent successfully",
                         "response": response_data[:200]  # Ограничиваем размер ответа
                     }
-                    return result
             except urllib.error.HTTPError as e:
-                logger.error(f"HTTPError with urllib: {e}")
                 return {
                     "status": e.code,
                     "error": str(e),
                     "response": e.read().decode('utf-8')[:200] if hasattr(e, 'read') else ""
                 }
             except Exception as e:
-                logger.error(f"General error with urllib: {e}")
                 return {
                     "status": 0,
                     "error": str(e),
@@ -264,11 +236,8 @@ async def send_http_request(url, data, timeout=10):
                 }
                 
         result = await loop.run_in_executor(None, make_request)
-        logger.info(f"Request result: {json.dumps(result, ensure_ascii=False)}")
         return result
     except Exception as e:
-        logger.error(f"Ошибка при использовании urllib: {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             "status": 0,
             "error": f"Failed to send webhook: {str(e)}",
@@ -283,50 +252,23 @@ async def send_webhook(args, assistant_config=None, client_id=None):
     
     Args:
         args: Словарь аргументов:
-            - url: Полный URL вебхука (опционально, если указан в системных инструкциях)
-            - event: Код события (опционально, если указан в системных инструкциях)
+            - url: Полный URL вебхука
+            - event: Код события
             - payload: Произвольные данные (опционально)
             
     Returns:
         Результат выполнения вебхука
     """
     try:
-        # Извлечение URL и event из аргументов или системных инструкций
         url = args.get("url")
         event = args.get("event")
         payload = args.get("payload", {})
         
-        logger.info(f"send_webhook вызван с аргументами: url={url}, event={event}, payload={payload}")
-        
-        # Извлечение URL из системных инструкций, если он не указан в аргументах
-        if not url and assistant_config and hasattr(assistant_config, "system_prompt"):
-            system_prompt = assistant_config.system_prompt
-            
-            # Попытка найти URL в системных инструкциях с помощью регулярного выражения
-            url_match = re.search(r'https?://[^\s"\']+', system_prompt)
-            if url_match:
-                url = url_match.group(0)
-                logger.info(f"URL извлечен из системных инструкций: {url}")
-                
-        # Проверка обязательных параметров
         if not url:
-            logger.error("URL is required for send_webhook")
-            return {"error": "URL is required", "status": "error"}
-            
-        # Извлечение event из системных инструкций, если он не указан в аргументах
-        if not event and assistant_config and hasattr(assistant_config, "system_prompt"):
-            system_prompt = assistant_config.system_prompt
-            
-            # Попытка найти event в системных инструкциях
-            event_match = re.search(r'event\s*[-–—:]\s*(\w+(?:\s+\w+)*)', system_prompt)
-            if event_match:
-                event = event_match.group(1).strip()
-                logger.info(f"Event извлечен из системных инструкций: {event}")
+            return {"error": "URL is required"}
         
         if not event:
-            # Значение event по умолчанию, если не удалось извлечь из инструкций
-            event = "webhook_triggered"
-            logger.info(f"Используется event по умолчанию: {event}")
+            return {"error": "Event is required"}
             
         # Формируем данные для отправки
         data = {
@@ -342,23 +284,9 @@ async def send_webhook(args, assistant_config=None, client_id=None):
         if client_id:
             data["client_id"] = client_id
         
-        logger.info(f"Отправка вебхука на URL: {url}")
-        logger.info(f"Данные вебхука: {json.dumps(data, ensure_ascii=False)}")
-        
         # Отправляем запрос с помощью доступных библиотек
-        result = await send_http_request(url, data)
-        logger.info(f"Результат отправки вебхука: {json.dumps(result, ensure_ascii=False)}")
-        
-        # Добавляем оригинальные аргументы в результат
-        result["original_args"] = {
-            "url": url,
-            "event": event,
-            "payload": payload
-        }
-        
-        return result
+        return await send_http_request(url, data)
         
     except Exception as e:
         logger.error(f"Ошибка при отправке вебхука: {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        return {"error": f"Webhook error: {str(e)}", "status": "error"}
+        return {"error": f"Webhook error: {str(e)}"}
