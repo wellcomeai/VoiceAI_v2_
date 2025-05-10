@@ -204,7 +204,15 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
             
             # Логирование каждого полученного сообщения
             msg_type = response_data.get("type", "unknown")
-            logger.info(f"[DEBUG] Получено сообщение от OpenAI: тип={msg_type}")
+            
+            # Полное логирование для событий связанных с функциями
+            if "function" in msg_type or "tool" in msg_type:
+                try:
+                    logger.info(f"[DEBUG-FUNCTION] {msg_type}: {json.dumps(response_data, ensure_ascii=False)}")
+                except:
+                    logger.info(f"[DEBUG-FUNCTION] {msg_type}: {str(response_data)[:500]}")
+            else:
+                logger.info(f"[DEBUG] Получено сообщение от OpenAI: тип={msg_type}")
             
             # Дополнительное логирование для транскрипции
             if "transcript" in msg_type or "transcription" in msg_type:
@@ -277,6 +285,8 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                 function_call_id = response_data.get("function_call_id")
                 function_data = response_data.get("function", {})
                 
+                # Логируем все данные функции для отладки
+                logger.info(f"[DEBUG-FUNCTION] Полные данные вызова функции: {json.dumps(response_data, ensure_ascii=False)}")
                 logger.info(f"[DEBUG] Получен вызов функции: {function_data.get('name')}, аргументы: {function_data.get('arguments')}")
                 
                 # Сообщаем клиенту о том, что выполняется функция
