@@ -379,8 +379,7 @@ class OpenAIRealtimeClient:
 
     async def send_function_result(self, function_call_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Send the result of a function execution back to OpenAI using the correct API format.
-        Properly handles errors and returns details about the delivery status.
+        Send the result of a function execution back to OpenAI as a conversation.item.create event.
         
         Args:
             function_call_id: ID of the function call
@@ -405,18 +404,18 @@ class OpenAIRealtimeClient:
         
         try:
             # Формируем событие для добавления в историю разговора результата функции
-            # точно по указанной в документации структуре
+            # согласно указанному формату с корректным item.type
             payload = {
-                "type": "conversation.item.create",
+                "type": "conversation.item.create",          # клиентский event для добавления Item
                 "event_id": f"funcres_{time.time()}",
                 "item": {
                     "id": str(uuid.uuid4()),
-                    "type": "function",            # обязательный параметр item.type
-                    "role": "tool",                # или "function", в зависимости от схемы
-                    "name": function_call_id,      # связываем с вызовом функции
+                    "type": "function_call_output",          # корректное значение согласно ошибке
+                    "role": "assistant",                     # для результатов функций используем assistant
+                    "name": function_call_id,                # связывает Item с вызовом функции
                     "content": [
                         {
-                            "type": "tool_result", 
+                            "type": "tool_result",           # соответствует схеме content для результатов функций
                             "data": result
                         }
                     ]
@@ -427,7 +426,7 @@ class OpenAIRealtimeClient:
             logger.info(f"Payload: {json.dumps(payload, ensure_ascii=False)[:200]}...")
             
             await self.ws.send(json.dumps(payload))
-            logger.info(f"Результат функции отправлен для {function_call_id}")
+            logger.info(f"Результат функции отправлен как item.create: {function_call_id}")
             
             # Возвращаем статус отправки
             return {
