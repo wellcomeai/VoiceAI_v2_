@@ -211,6 +211,10 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
         "arguments_buffer": "" # Накопленные аргументы
     }
     
+    # Флаг ожидания ответа после вызова функции
+    waiting_for_function_response = False
+    last_function_delivery_status = None
+    
     try:
         logger.info(f"[DEBUG] Начало обработки сообщений от OpenAI для клиента {openai_client.client_id}")
         while True:
@@ -229,8 +233,26 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                 # Подробное логирование для ошибок
                 if msg_type == "error":
                     logger.error(f"[DEBUG] ОШИБКА API: {json.dumps(response_data, ensure_ascii=False)}")
-                    # Отправляем ошибку клиенту
-                    await websocket.send_json(response_data)
+                    
+                    # Если ошибка связана с отправкой результата функции, обрабатываем особым образом
+                    if waiting_for_function_response and "item" in str(response_data.get("error", {})):
+                        error_message = response_data.get("error", {}).get("message", "Ошибка отправки результата функции")
+                        logger.error(f"[DEBUG] Ошибка при отправке результата функции: {error_message}")
+                        
+                        # Создаем свое сообщение пользователю об ошибке
+                        error_response = {
+                            "type": "response.content_part.added",
+                            "content": {
+                                "text": f"Ошибка при выполнении функции: {error_message}"
+                            }
+                        }
+                        await websocket.send_json(error_response)
+                        
+                        # Сбрасываем флаг ожидания
+                        waiting_for_function_response = False
+                    else:
+                        # Отправляем остальные ошибки клиенту
+                        await websocket.send_json(response_data)
                     continue
                 
                 logger.info(f"[DEBUG] Получено сообщение от OpenAI: тип={msg_type}")
@@ -350,16 +372,55 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                             # Сохраняем результат для логирования
                             function_result = result
                             
-                            # Отправляем результат обратно в OpenAI
-                            await openai_client.send_function_result(function_call_id, result)
+                            # Устанавливаем флаг ожидания ответа после вызова функции
+                            waiting_for_function_response = True
                             
-                            # Сообщаем клиенту о завершении
+                            # Отправляем результат обратно в OpenAI и получаем статус отправки
+                            delivery_status = await openai_client.send_function_result(function_call_id, result)
+                            last_function_delivery_status = delivery_status
+                            
+                            # Если произошла ошибка отправки результата
+                            if not delivery_status["success"]:
+                                logger.error(f"[DEBUG] Ошибка отправки результата функции: {delivery_status['error']}")
+                                
+                                # Генерируем сообщение для пользователя о проблеме
+                                error_message = {
+                                    "type": "response.content_part.added",
+                                    "content": {
+                                        "text": f"Произошла ошибка при выполнении функции: {delivery_status['error']}"
+                                    }
+                                }
+                                await websocket.send_json(error_message)
+                                
+                                # Сбрасываем флаг ожидания
+                                waiting_for_function_response = False
+                            
+                            # Информируем клиента о результате в любом случае
                             await websocket.send_json({
                                 "type": "function_call.completed",
                                 "function": function_name,
                                 "function_call_id": function_call_id,
                                 "result": result
                             })
+                            
+                            # Анализируем результат вебхука для формирования понятного ответа пользователю
+                            if function_name == "send_webhook" and waiting_for_function_response:
+                                status_code = result.get("status", 0)
+                                
+                                # Если был сбой доставки, но не из-за статус кода HTTP
+                                if status_code == 404:
+                                    # Webhook не найден, формируем информативное сообщение
+                                    webhook_error_message = {
+                                        "type": "response.content_part.added",
+                                        "content": {
+                                            "text": f"Вебхук не найден (ошибка 404). Запрос был отправлен на URL: {arguments.get('url', 'неизвестный URL')}, но такой вебхук не зарегистрирован. Пожалуйста, проверьте настройки n8n и повторите попытку."
+                                        }
+                                    }
+                                    await websocket.send_json(webhook_error_message)
+                                    
+                                    # Сбрасываем флаг ожидания, т.к. мы уже предоставили пользователю ответ
+                                    waiting_for_function_response = False
+                            
                         except json.JSONDecodeError as e:
                             error_msg = f"Ошибка при парсинге аргументов функции: {e}"
                             logger.error(f"[DEBUG] {error_msg}")
@@ -382,6 +443,19 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                         "arguments_buffer": ""
                     }
 
+                # Обработка ответа с содержимым (может быть ответ после вызова функции)
+                elif msg_type == "response.content_part.added":
+                    # Если был вызов функции, и мы ждем ответа - отслеживаем это
+                    if waiting_for_function_response:
+                        logger.info(f"[DEBUG] Получен ответ после выполнения функции")
+                        waiting_for_function_response = False
+                    
+                    # Обрабатываем текст ответа
+                    if "text" in response_data.get("content", {}):
+                        new_text = response_data.get("content", {}).get("text", "")
+                        assistant_transcript = new_text
+                        logger.info(f"[DEBUG] Из response.content_part.added получен текст ассистента: '{new_text}'")
+                
                 # Старая логика для обратной совместимости с function_call
                 elif msg_type == "function_call":
                     # Извлекаем данные вызова функции
@@ -405,7 +479,7 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                     function_result = result
                     
                     # Отправляем результат в OpenAI
-                    await openai_client.send_function_result(function_call_id, result)
+                    delivery_status = await openai_client.send_function_result(function_call_id, result)
                     
                     # Сообщаем клиенту о результате
                     await websocket.send_json({
@@ -481,12 +555,34 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                     chunk = base64.b64decode(b64)
                     await websocket.send_bytes(chunk)
                     continue
-                    
-                # Обновляем данные после получения текста ответа
-                if msg_type == "response.content_part.added":
-                    if "text" in response_data.get("content", {}):
-                        assistant_transcript = response_data.get("content", {}).get("text", "")
-                        logger.info(f"[DEBUG] Из response.content_part.added получен текст ассистента: '{assistant_transcript}'")
+                
+                # Завершение ответа - если функция не обработана должным образом, вставляем информацию
+                if msg_type == "response.output_item.done":
+                    # Если мы все еще ждем ответа функции и не получили контента
+                    if waiting_for_function_response and last_function_delivery_status:
+                        # Ассистент не обработал результат функции должным образом
+                        if openai_client.last_function_name == "send_webhook" and function_result:
+                            status_code = function_result.get("status", 0)
+                            
+                            # Генерируем информативный ответ в зависимости от статуса вебхука
+                            message_text = ""
+                            if status_code == 404:
+                                message_text = "Вебхук не найден (ошибка 404). Возможно, он не зарегистрирован или не активирован."
+                            elif status_code >= 200 and status_code < 300:
+                                message_text = "Вебхук успешно выполнен."
+                            else:
+                                message_text = f"Вебхук вернул статус {status_code}."
+                            
+                            # Отправляем информацию клиенту
+                            await websocket.send_json({
+                                "type": "response.content_part.added",
+                                "content": {
+                                    "text": message_text
+                                }
+                            })
+                        
+                        # Сбрасываем флаг ожидания
+                        waiting_for_function_response = False
 
                 # все остальные — JSON
                 await websocket.send_json(response_data)
@@ -561,6 +657,9 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                         function_result = None
                     else:
                         logger.info(f"[DEBUG] Запись в Google Sheet пропущена - sheet_id не настроен")
+                        
+                    # Сбрасываем флаг ожидания функции, если он остался активным
+                    waiting_for_function_response = False
             except ConnectionClosed as e:
                 logger.warning(f"[DEBUG] Соединение с OpenAI закрыто: {e}")
                 # Пробуем переподключиться
