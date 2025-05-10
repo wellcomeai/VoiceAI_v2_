@@ -127,6 +127,7 @@ class OpenAIRealtimeClient:
         self.session_id = str(uuid.uuid4())
         self.conversation_record_id: Optional[str] = None
         self.webhook_url = None  # Сохраняем URL вебхука из промпта
+        self.last_function_name = None  # Сохраняем имя последней вызванной функции
         
         # Извлекаем URL вебхука из промпта при инициализации
         if hasattr(assistant_config, "system_prompt") and assistant_config.system_prompt:
@@ -335,6 +336,9 @@ class OpenAIRealtimeClient:
             function_name = function_call_data.get("function", {}).get("name")
             arguments = function_call_data.get("function", {}).get("arguments", {})
             
+            # Сохраняем имя функции для последующего использования
+            self.last_function_name = function_name
+            
             # Если имя функции в camelCase, приводим к snake_case
             if function_name and function_name.lower() == "sendwebhook":
                 function_name = "send_webhook"
@@ -373,31 +377,41 @@ class OpenAIRealtimeClient:
             logger.error(f"Error processing function call: {e}")
             return {"error": str(e)}
 
-    async def send_function_result(self, function_call_id: str, result: Dict[str, Any]) -> bool:
+    async def send_function_result(self, function_call_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
         """
         Send the result of a function execution back to OpenAI using the correct API format.
+        Properly handles errors and returns details about the delivery status.
         
         Args:
             function_call_id: ID of the function call
             result: Result of the function execution
             
         Returns:
-            bool: True if successful, False otherwise
+            Dict: Status information about the result delivery
+                {
+                    "success": bool,
+                    "error": str or None,
+                    "payload": dict - payload that was sent 
+                }
         """
         if not self.is_connected or not self.ws:
-            logger.error("Cannot send function result: not connected")
-            return False
+            error_msg = "Cannot send function result: not connected"
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "error": error_msg,
+                "payload": None
+            }
         
         try:
-            # В Realtime API вместо function_call_output нужно использовать conversation.item.create
-            # с типом tool_result
+            # Правильный формат для Realtime API согласно документации и требованиям
             payload = {
                 "type": "conversation.item.create",
                 "item": {
                     "role": "tool",
                     "content": [
                         {
-                            "type": "tool_result",
+                            "type": "tool_result",  # Обязательное поле item.type
                             "tool_call_id": function_call_id,
                             "content": result
                         }
@@ -405,13 +419,74 @@ class OpenAIRealtimeClient:
                 }
             }
             
-            logger.info(f"Отправка результата функции: {function_call_id} через conversation.item.create")
+            logger.info(f"Отправка результата функции: {function_call_id}")
+            logger.info(f"Payload: {json.dumps(payload, ensure_ascii=False)[:200]}...")
+            
             await self.ws.send(json.dumps(payload))
-            logger.info(f"Результат функции отправлен: {function_call_id}")
-            return True
+            logger.info(f"Результат функции отправлен для {function_call_id}")
+            
+            # Ждем подтверждения или ошибки от API
+            try:
+                # Устанавливаем таймаут на получение ответа в 5 секунд
+                response_timer = time.time() + 5
+                
+                while time.time() < response_timer:
+                    # Пытаемся получить следующее сообщение от сервера
+                    # с малым таймаутом, чтобы не блокировать надолго
+                    try:
+                        raw_response = await asyncio.wait_for(self.ws.recv(), 0.5)
+                        response = json.loads(raw_response)
+                        
+                        # Если получена ошибка с указанием на отправленный payload
+                        if response.get("type") == "error" and "item" in str(response.get("error", {})):
+                            error_info = response.get("error", {})
+                            error_msg = f"API error: {error_info.get('message', 'Unknown error')}"
+                            logger.error(f"[DEBUG] Ошибка при отправке результата функции: {error_msg}")
+                            
+                            return {
+                                "success": False,
+                                "error": error_msg,
+                                "payload": payload
+                            }
+                        
+                        # Если пришло подтверждение, что ответ был принят и обработан
+                        if response.get("type") == "conversation.item.created":
+                            return {
+                                "success": True,
+                                "error": None,
+                                "payload": payload
+                            }
+                    except asyncio.TimeoutError:
+                        # Таймаут на одну попытку получения - это нормально, продолжаем
+                        continue
+                    except Exception as e:
+                        logger.error(f"Ошибка при получении ответа после отправки результата: {e}")
+                        break
+                    
+                # Если мы дошли сюда, значит не получили явного подтверждения или ошибки
+                # Считаем, что отправка успешна, но без подтверждения
+                return {
+                    "success": True,
+                    "error": None,
+                    "payload": payload
+                }
+                
+            except Exception as e:
+                logger.error(f"Ошибка при ожидании ответа: {e}")
+                return {
+                    "success": False,
+                    "error": f"Error waiting for response: {str(e)}",
+                    "payload": payload
+                }
+            
         except Exception as e:
-            logger.error(f"Error sending function result: {e}")
-            return False
+            error_msg = f"Error sending function result: {e}"
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "error": error_msg,
+                "payload": None
+            }
 
     async def process_audio(self, audio_buffer: bytes) -> bool:
         """
