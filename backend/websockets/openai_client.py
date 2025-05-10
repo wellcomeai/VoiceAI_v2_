@@ -4,6 +4,7 @@ import uuid
 import base64
 import time
 import websockets
+import re
 from websockets.exceptions import ConnectionClosed
 
 from typing import Optional, List, Dict, Any, Union, AsyncGenerator
@@ -39,16 +40,60 @@ def normalize_functions(assistant_functions):
     if isinstance(assistant_functions, dict) and "enabled_functions" in assistant_functions:
         enabled_functions = assistant_functions.get("enabled_functions", [])
         for func_name in enabled_functions:
+            # Проверяем прямое соответствие
             if func_name in defs:
                 result.append(defs[func_name])
+            # Проверяем нормализованное имя (snake_case vs camelCase)
+            elif func_name.lower() == "sendwebhook" and "send_webhook" in defs:
+                result.append(defs["send_webhook"])
+            elif func_name.lower() == "webhook" and "send_webhook" in defs:
+                result.append(defs["send_webhook"])
     # Обработка списка объектов из UI
     else:
         for func in assistant_functions:
             func_name = func.get("name")
-            if func_name and func_name in defs:
+            if not func_name:
+                continue
+                
+            # Проверяем прямое соответствие
+            if func_name in defs:
                 result.append(defs[func_name])
+            # Проверяем нормализованное имя (snake_case vs camelCase)
+            elif func_name.lower() == "sendwebhook" and "send_webhook" in defs:
+                result.append(defs["send_webhook"])
+            elif func_name.lower() == "webhook" and "send_webhook" in defs:
+                result.append(defs["send_webhook"])
                 
     return result
+
+def extract_webhook_url_from_prompt(prompt: str) -> Optional[str]:
+    """
+    Извлекает URL вебхука из системного промпта ассистента.
+    
+    Args:
+        prompt: Системный промпт ассистента
+        
+    Returns:
+        Найденный URL или None
+    """
+    if not prompt:
+        return None
+        
+    # Ищем URL с помощью регулярного выражения
+    # Паттерн 1: "URL вебхука: https://example.com"
+    pattern1 = r'URL\s+(?:вебхука|webhook):\s*(https?://[^\s"\'<>]+)'
+    # Паттерн 2: "webhook URL: https://example.com"
+    pattern2 = r'(?:вебхука|webhook)\s+URL:\s*(https?://[^\s"\'<>]+)'
+    # Паттерн 3: просто URL в тексте (менее точный)
+    pattern3 = r'https?://[^\s"\'<>]+'
+    
+    # Проверяем шаблоны по убыванию специфичности
+    for pattern in [pattern1, pattern2, pattern3]:
+        matches = re.findall(pattern, prompt, re.IGNORECASE)
+        if matches:
+            return matches[0]
+            
+    return None
 
 class OpenAIRealtimeClient:
     """
@@ -81,6 +126,13 @@ class OpenAIRealtimeClient:
         self.openai_url = settings.REALTIME_WS_URL
         self.session_id = str(uuid.uuid4())
         self.conversation_record_id: Optional[str] = None
+        self.webhook_url = None  # Сохраняем URL вебхука из промпта
+        
+        # Извлекаем URL вебхука из промпта при инициализации
+        if hasattr(assistant_config, "system_prompt") and assistant_config.system_prompt:
+            self.webhook_url = extract_webhook_url_from_prompt(assistant_config.system_prompt)
+            if self.webhook_url:
+                logger.info(f"Извлечен URL вебхука из промпта: {self.webhook_url}")
 
     async def connect(self) -> bool:
         """
@@ -119,6 +171,11 @@ class OpenAIRealtimeClient:
             voice = self.assistant_config.voice or DEFAULT_VOICE
             system_message = getattr(self.assistant_config, "system_prompt", None) or DEFAULT_SYSTEM_MESSAGE
             functions = getattr(self.assistant_config, "functions", None)
+
+            # Проверяем, есть ли URL вебхука в промпте
+            self.webhook_url = extract_webhook_url_from_prompt(system_message)
+            if self.webhook_url:
+                logger.info(f"Извлечен URL вебхука из промпта: {self.webhook_url}")
 
             # Send updated session settings with actual system_prompt
             if not await self.update_session(
@@ -253,13 +310,28 @@ class OpenAIRealtimeClient:
             function_name = function_call_data.get("function", {}).get("name")
             arguments = function_call_data.get("function", {}).get("arguments", {})
             
-            # If arguments are in string format (JSON), convert to dictionary
+            # Если имя функции в camelCase, приводим к snake_case
+            if function_name and function_name.lower() == "sendwebhook":
+                function_name = "send_webhook"
+                logger.info(f"Нормализовано имя функции: sendWebHook -> send_webhook")
+            
+            # Если arguments - строка, парсим JSON
             if isinstance(arguments, str):
                 try:
                     arguments = json.loads(arguments)
                 except json.JSONDecodeError:
                     logger.warning(f"Failed to parse function arguments as JSON: {arguments}")
                     arguments = {}
+            
+            # Если это webhook и URL не указан, но есть в промпте
+            if function_name == "send_webhook" and "url" not in arguments and self.webhook_url:
+                arguments["url"] = self.webhook_url
+                logger.info(f"Добавлен URL из промпта в аргументы функции: {self.webhook_url}")
+            
+            # Если event не указан, используем значение по умолчанию
+            if function_name == "send_webhook" and "event" not in arguments:
+                arguments["event"] = "default_event"
+                logger.info(f"Добавлен параметр event по умолчанию: 'default_event'")
             
             logger.info(f"Processing function call: {function_name} with arguments: {arguments}")
             
