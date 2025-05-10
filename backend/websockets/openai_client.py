@@ -12,11 +12,43 @@ from backend.core.config import settings
 from backend.core.logging import get_logger
 from backend.models.assistant import AssistantConfig
 from backend.models.conversation import Conversation
+from backend.utils.function_registry import get_function_definitions
 
 logger = get_logger(__name__)
 
 DEFAULT_VOICE = "alloy"
 DEFAULT_SYSTEM_MESSAGE = "You are a helpful voice assistant."
+
+def normalize_functions(assistant_functions):
+    """
+    Преобразует список функций из UI в полные определения с параметрами.
+    
+    Args:
+        assistant_functions: Список функций ассистента в любом формате
+            
+    Returns:
+        List: Список полных определений функций с параметрами
+    """
+    if not assistant_functions:
+        return []
+        
+    defs = get_function_definitions()
+    result = []
+    
+    # Обработка формата {"enabled_functions": [...]}
+    if isinstance(assistant_functions, dict) and "enabled_functions" in assistant_functions:
+        enabled_functions = assistant_functions.get("enabled_functions", [])
+        for func_name in enabled_functions:
+            if func_name in defs:
+                result.append(defs[func_name])
+    # Обработка списка объектов из UI
+    else:
+        for func in assistant_functions:
+            func_name = func.get("name")
+            if func_name and func_name in defs:
+                result.append(defs[func_name])
+                
+    return result
 
 class OpenAIRealtimeClient:
     """
@@ -134,56 +166,26 @@ class OpenAIRealtimeClient:
             "silence_duration_ms": 300,
             "create_response": True,
         }
+        
+        # Получаем нормализованные определения функций
+        normalized_functions = normalize_functions(functions)
+        
+        # Формируем tools для API
         tools = []
-        tool_choice = "none"
+        for func_def in normalized_functions:
+            tools.append({
+                "type": "function",
+                "name": func_def["name"],
+                "description": func_def["description"],
+                "parameters": func_def["parameters"]
+            })
         
-        # Normalize function format
-        if functions:
-            # Import function definitions
-            from backend.utils.function_registry import FUNCTION_DEFINITIONS
-            
-            # Handle case when functions are in {enabled_functions: [...]} format
-            if isinstance(functions, dict) and "enabled_functions" in functions:
-                enabled_functions = functions.get("enabled_functions", [])
-                
-                # Format for Realtime API
-                for func_name in enabled_functions:
-                    # Check if function exists in our definitions
-                    if func_name in FUNCTION_DEFINITIONS:
-                        # Get function info from definitions
-                        func_def = FUNCTION_DEFINITIONS[func_name]
-                        tools.append({
-                            "type": "function",
-                            "name": func_name,
-                            "description": func_def.get("description", f"Function {func_name}"),
-                            "parameters": func_def.get("parameters", {
-                                "type": "object",
-                                "properties": {},
-                                "required": []
-                            })
-                        })
-            else:
-                # Handle case when functions are already in the right format
-                for func in functions:
-                    func_name = func.get("name")
-                    if func_name:
-                        tools.append({
-                            "type": "function",
-                            "name": func_name,
-                            "description": func.get("description", f"Function {func_name}"),
-                            "parameters": func.get("parameters", {
-                                "type": "object",
-                                "properties": {},
-                                "required": []
-                            })
-                        })
+        # Устанавливаем tool_choice на основе наличия tools
+        tool_choice = "auto" if tools else "none"
         
-        # Set tool_choice
-        if tools:
-            tool_choice = "auto"  # Allow model to decide when to call functions
+        logger.info(f"Setting up session with {len(tools)} tools, tool_choice={tool_choice}")
         
         # Включение транскрипции аудио в соответствии с документацией OpenAI
-        # Но без изменения существующего формата
         input_audio_transcription = {
             "model": "whisper-1"
         }
@@ -206,7 +208,12 @@ class OpenAIRealtimeClient:
         }
         try:
             await self.ws.send(json.dumps(payload))
-            logger.info(f"Session settings sent (voice={voice}, tools={len(tools)})")
+            logger.info(f"Session settings sent (voice={voice}, tools={len(tools)}, tool_choice={tool_choice})")
+            
+            # Вывод подробной информации о функциях в лог
+            if tools:
+                for tool in tools:
+                    logger.info(f"Enabled function: {tool['name']}, params: {json.dumps(tool['parameters'], ensure_ascii=False)[:100]}...")
         except Exception as e:
             logger.error(f"Error sending session.update: {e}")
             return False
