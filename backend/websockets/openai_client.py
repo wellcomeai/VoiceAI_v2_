@@ -403,24 +403,18 @@ class OpenAIRealtimeClient:
             }
         
         try:
-            # Правильная структура для отправки результата функции
+            # Правильная структура для отправки результата функции - убираем поле role
             payload = {
                 "type": "conversation.item.create",
                 "event_id": f"funcres_{time.time()}",
                 "item": {
                     "id": str(uuid.uuid4()),
                     "type": "function_call_output",
-                    "role": "assistant",
                     "call_id": function_call_id,
                     "name": self.last_function_name or function_call_id,
-                    "output": {  # Добавлено обязательное поле output
+                    "output": {  # Обязательное поле output
                         "type": "tool_result",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "data": result
-                            }
-                        ]
+                        "data": result
                     }
                 }
             }
@@ -462,12 +456,13 @@ class OpenAIRealtimeClient:
             return False
             
         try:
-            # Запрашиваем новый ответ от модели
+            # Запрашиваем новый ответ от модели с обязательным указанием модальностей
             response_payload = {
                 "type": "response.create",
                 "event_id": f"resp_after_func_{time.time()}",
                 "response": {
-                    "modalities": ["text", "audio"]
+                    "modalities": ["text", "audio"],
+                    "voice": self.assistant_config.voice or DEFAULT_VOICE
                 }
             }
             
