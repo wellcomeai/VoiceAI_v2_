@@ -241,13 +241,14 @@ class OpenAIRealtimeClient:
         if not self.is_connected or not self.ws:
             logger.error("Cannot update session: not connected")
             return False
-            
+        
+        # Оставляем серверу только детекцию конца речи, ручной commit будем делать сами
         turn_detection = {
             "type": "server_vad",
             "threshold": 0.25,
             "prefix_padding_ms": 200,
             "silence_duration_ms": 300,
-            "create_response": True,
+            "create_response": False,  # Отключаем автоматическую отправку ответа
         }
         
         # Получаем нормализованные определения функций
@@ -468,6 +469,10 @@ class OpenAIRealtimeClient:
         except ConnectionClosed:
             logger.error("Connection closed while sending audio data")
             self.is_connected = False
+            # Пробуем сразу восстановить соединение
+            if await self.reconnect():
+                # Повторно отправляем последний аудио-буфер после восстановления соединения
+                return await self.process_audio(audio_buffer)
             return False
         except Exception as e:
             logger.error(f"Error processing audio: {e}")
@@ -491,6 +496,9 @@ class OpenAIRealtimeClient:
         except ConnectionClosed:
             logger.error("Connection closed while committing audio")
             self.is_connected = False
+            # Пробуем восстановить соединение и повторно отправить commit
+            if await self.reconnect():
+                return await self.commit_audio()
             return False
         except Exception as e:
             logger.error(f"Error committing audio: {e}")
@@ -514,6 +522,8 @@ class OpenAIRealtimeClient:
         except ConnectionClosed:
             logger.error("Connection closed while clearing audio buffer")
             self.is_connected = False
+            # Пробуем восстановить соединение
+            await self.reconnect()
             return False
         except Exception as e:
             logger.error(f"Error clearing audio buffer: {e}")
