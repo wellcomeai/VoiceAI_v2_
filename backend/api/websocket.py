@@ -4,7 +4,9 @@ from typing import Optional
 
 from backend.core.logging import get_logger
 from backend.db.session import get_db
-from backend.api import deps
+# Удаляем проблемный импорт
+# from backend.api import deps
+from backend.core.dependencies import get_current_user  # Импортируем напрямую из core
 from backend.models.user import User
 from backend.models.assistant import AssistantConfig
 
