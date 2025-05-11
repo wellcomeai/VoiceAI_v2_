@@ -3,7 +3,7 @@ WebSocket module for WellcomeAI application.
 Handles real-time communication with clients.
 """
 
-# Не импортируем обработчики напрямую, чтобы избежать циклических импортов
-# Вместо этого объявляем, какие модули и классы доступны через пакет
+from .handler import handle_websocket_connection
+from .openai_client import OpenAIRealtimeClient
 
-__all__ = ["handler", "openai_client"]
+__all__ = ["handle_websocket_connection", "OpenAIRealtimeClient"]
