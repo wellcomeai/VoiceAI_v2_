@@ -551,11 +551,25 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                                     user_transcript = part_text
                                     logger.info(f"[DEBUG] Из conversation.item.created получен текст пользователя: '{user_transcript}'")
 
-                # если это аудио-чанк — отдаём как bytes
+                # Обработка аудио-чанков от Realtime API
                 if msg_type == "audio":
+                    # Старая версия API - для обратной совместимости
                     b64 = response_data.get("data", "")
                     chunk = base64.b64decode(b64)
                     await websocket.send_bytes(chunk)
+                    continue
+                
+                # Обработка аудио-чанков от Realtime API - новый формат
+                elif msg_type == "response.audio.delta":
+                    # Каждая delta — Base64-строка с кусочком аудио
+                    b64 = response_data.get("delta", "")
+                    if b64:
+                        chunk = base64.b64decode(b64)
+                        await websocket.send_bytes(chunk)
+                    continue
+                elif msg_type == "response.audio.done":
+                    # Сигнал конца аудио, можно отправить маркер или игнорировать
+                    logger.info(f"[DEBUG] Получен сигнал завершения аудио: response.audio.done")
                     continue
                 
                 # Завершение ответа - если функция не обработана должным образом, вставляем информацию
