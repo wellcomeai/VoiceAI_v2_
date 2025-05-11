@@ -427,7 +427,11 @@ class OpenAIRealtimeClient:
             # Генерируем короткий ID длиной до 32 символов
             short_item_id = generate_short_id("func_")
             
-            # Правильная структура для отправки результата функции
+            # Преобразуем результат в строку JSON
+            # OpenAI ожидает, что поле output будет строкой, а не объектом
+            result_json = json.dumps(result)
+            
+            # Исправленная структура для отправки результата функции
             payload = {
                 "type": "conversation.item.create",
                 "event_id": f"funcres_{time.time()}",
@@ -435,10 +439,7 @@ class OpenAIRealtimeClient:
                     "id": short_item_id,  # Максимум 32 символа
                     "type": "function_call_output",
                     "call_id": function_call_id,
-                    "output": {
-                        "type": "tool_result",
-                        "content": result
-                    }
+                    "output": result_json  # Строка вместо объекта
                 }
             }
             
