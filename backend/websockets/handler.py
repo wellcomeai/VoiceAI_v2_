@@ -248,6 +248,9 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                         }
                         await websocket.send_json(error_response)
                         
+                        # После сообщения об ошибке явно запрашиваем новый ответ для генерации аудио
+                        await openai_client.create_response_after_function()
+                        
                         # Сбрасываем флаг ожидания
                         waiting_for_function_response = False
                     else:
@@ -391,6 +394,9 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                                     }
                                 }
                                 await websocket.send_json(error_message)
+                                
+                                # После сообщения об ошибке явно запрашиваем новый ответ для генерации аудио
+                                await openai_client.create_response_after_function()
                                 
                                 # Сбрасываем флаг ожидания
                                 waiting_for_function_response = False
@@ -580,6 +586,10 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                                     "text": message_text
                                 }
                             })
+                            
+                            # Явно запрашиваем новый ответ для генерации аудио,
+                            # так как текущий ответ не содержит аудио
+                            await openai_client.create_response_after_function()
                         
                         # Сбрасываем флаг ожидания
                         waiting_for_function_response = False
