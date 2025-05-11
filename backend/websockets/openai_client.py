@@ -95,6 +95,25 @@ def extract_webhook_url_from_prompt(prompt: str) -> Optional[str]:
             
     return None
 
+def generate_short_id(prefix: str = "") -> str:
+    """
+    Генерирует короткий уникальный идентификатор длиной до 32 символов.
+    
+    Args:
+        prefix: Опциональный префикс для ID
+        
+    Returns:
+        str: Короткий уникальный ID
+    """
+    # Создаем UUID без дефисов и обрезаем до нужной длины
+    raw_id = str(uuid.uuid4()).replace("-", "")
+    
+    # Если есть префикс, учитываем его в общей длине
+    max_id_len = 32 - len(prefix)
+    
+    # Возвращаем ID с префиксом, общей длиной не более 32 символов
+    return f"{prefix}{raw_id[:max_id_len]}"
+
 class OpenAIRealtimeClient:
     """
     Client for interacting with OpenAI's Realtime API through WebSockets.
@@ -405,13 +424,15 @@ class OpenAIRealtimeClient:
         try:
             logger.info(f"[DEBUG-FUNCTION] Начало отправки результата функции: {function_call_id}")
             
+            # Генерируем короткий ID длиной до 32 символов
+            short_item_id = generate_short_id("func_")
+            
             # Правильная структура для отправки результата функции
-            # Удалено поле name, вызвавшее ошибку
             payload = {
                 "type": "conversation.item.create",
                 "event_id": f"funcres_{time.time()}",
                 "item": {
-                    "id": str(uuid.uuid4()),
+                    "id": short_item_id,  # Максимум 32 символа
                     "type": "function_call_output",
                     "call_id": function_call_id,
                     "output": {
