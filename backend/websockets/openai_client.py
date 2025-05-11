@@ -403,23 +403,25 @@ class OpenAIRealtimeClient:
             }
         
         try:
-            # Формируем событие для добавления в историю разговора результата функции
-            # с обязательным полем call_id для связи с вызовом функции
+            # Правильная структура для отправки результата функции
             payload = {
-                "type": "conversation.item.create",          # клиентский event для добавления Item
+                "type": "conversation.item.create",
                 "event_id": f"funcres_{time.time()}",
                 "item": {
                     "id": str(uuid.uuid4()),
-                    "type": "function_call_output",          # корректное значение согласно ошибке
-                    "role": "assistant",                     # для результатов функций используем assistant
-                    "call_id": function_call_id,             # обязательное поле связи с вызовом функции
-                    "name": self.last_function_name or function_call_id,  # используем имя функции если доступно
-                    "content": [
-                        {
-                            "type": "tool_result",           # соответствует схеме content для результатов функций
-                            "data": result
-                        }
-                    ]
+                    "type": "function_call_output",
+                    "role": "assistant",
+                    "call_id": function_call_id,
+                    "name": self.last_function_name or function_call_id,
+                    "output": {  # Добавлено обязательное поле output
+                        "type": "tool_result",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "data": result
+                            }
+                        ]
+                    }
                 }
             }
             
@@ -429,7 +431,9 @@ class OpenAIRealtimeClient:
             await self.ws.send(json.dumps(payload))
             logger.info(f"Результат функции отправлен как item.create: {function_call_id}")
             
-            # Возвращаем статус отправки
+            # После отправки результата, явно запрашиваем новый ответ от модели
+            await self.create_response_after_function()
+            
             return {
                 "success": True,
                 "error": None,
@@ -444,6 +448,36 @@ class OpenAIRealtimeClient:
                 "error": error_msg,
                 "payload": None
             }
+
+    async def create_response_after_function(self) -> bool:
+        """
+        Явно запрашивает новый ответ от модели после выполнения функции.
+        Это обеспечит генерацию аудио-ответа.
+        
+        Returns:
+            bool: True если успешно, False иначе
+        """
+        if not self.is_connected or not self.ws:
+            logger.error("Cannot create response: not connected")
+            return False
+            
+        try:
+            # Запрашиваем новый ответ от модели
+            response_payload = {
+                "type": "response.create",
+                "event_id": f"resp_after_func_{time.time()}",
+                "response": {
+                    "modalities": ["text", "audio"]
+                }
+            }
+            
+            await self.ws.send(json.dumps(response_payload))
+            logger.info("Запрошен новый ответ после выполнения функции")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error creating response after function: {e}")
+            return False
 
     async def process_audio(self, audio_buffer: bytes) -> bool:
         """
