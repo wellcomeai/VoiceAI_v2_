@@ -5,15 +5,17 @@ Contains FastAPI route definitions for all endpoints.
 
 from fastapi import APIRouter
 
+# Создаем main API router до импортов других роутеров
+api_router = APIRouter()
+
+# Импортируем роутеры после определения api_router для избежания циклических импортов
 from .auth import router as auth_router
 from .users import router as users_router
 from .assistants import router as assistants_router
 from .files import router as files_router
-from .websocket import router as websocket_router
 from .subscriptions import router as subscriptions_router
-
-# Create a main API router
-api_router = APIRouter()
+# Импортируем websocket_router последним, чтобы избежать циклических импортов
+from .websocket import router as websocket_router
 
 # Исправлено: удалены префиксы, будут добавлены в app.py
 api_router.include_router(auth_router, tags=["Authentication"])
