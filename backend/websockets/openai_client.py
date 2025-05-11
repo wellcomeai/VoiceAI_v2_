@@ -406,6 +406,7 @@ class OpenAIRealtimeClient:
             logger.info(f"[DEBUG-FUNCTION] Начало отправки результата функции: {function_call_id}")
             
             # Правильная структура для отправки результата функции
+            # Удалено поле name, вызвавшее ошибку
             payload = {
                 "type": "conversation.item.create",
                 "event_id": f"funcres_{time.time()}",
@@ -413,10 +414,8 @@ class OpenAIRealtimeClient:
                     "id": str(uuid.uuid4()),
                     "type": "function_call_output",
                     "call_id": function_call_id,
-                    "name": self.last_function_name or function_call_id,
-                    "output": {  # Исправленная структура поля output
+                    "output": {
                         "type": "tool_result",
-                        "tool_call_id": function_call_id,
                         "content": result
                     }
                 }
