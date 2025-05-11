@@ -232,6 +232,14 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                 # Логирование каждого полученного сообщения
                 msg_type = response_data.get("type", "unknown")
                 
+                # Игнорируем ошибки input_audio_buffer_commit_empty - это нормально при автоматическом коммите
+                if msg_type == "error":
+                    error_code = response_data.get("error", {}).get("code", "")
+                    if error_code == "input_audio_buffer_commit_empty":
+                        # Просто логируем это, но не отправляем ошибку клиенту
+                        logger.error(f"[DEBUG] ОШИБКА API (игнорируется): {json.dumps(response_data, ensure_ascii=False)}")
+                        continue
+                
                 # Подробное логирование для ошибок
                 if msg_type == "error":
                     logger.error(f"[DEBUG] ОШИБКА API: {json.dumps(response_data, ensure_ascii=False)}")
@@ -551,25 +559,32 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                                     user_transcript = part_text
                                     logger.info(f"[DEBUG] Из conversation.item.created получен текст пользователя: '{user_transcript}'")
 
-                # Обработка аудио-чанков от Realtime API
+                # Обработка аудио-чанков - поддержка всех возможных форматов
                 if msg_type == "audio":
-                    # Старая версия API - для обратной совместимости
+                    # Старая версия API
                     b64 = response_data.get("data", "")
                     chunk = base64.b64decode(b64)
                     await websocket.send_bytes(chunk)
                     continue
-                
-                # Обработка аудио-чанков от Realtime API - новый формат
                 elif msg_type == "response.audio.delta":
-                    # Каждая delta — Base64-строка с кусочком аудио
+                    # Новая версия API для аудио
                     b64 = response_data.get("delta", "")
                     if b64:
                         chunk = base64.b64decode(b64)
                         await websocket.send_bytes(chunk)
                     continue
                 elif msg_type == "response.audio.done":
-                    # Сигнал конца аудио, можно отправить маркер или игнорировать
+                    # Сигнал конца аудио
                     logger.info(f"[DEBUG] Получен сигнал завершения аудио: response.audio.done")
+                    continue
+                
+                # Обработка автоматического коммита от сервера
+                if msg_type == "input_audio_buffer.committed":
+                    # При использовании Server VAD с create_response: True
+                    # Можно логировать событие, но ничего делать не нужно
+                    logger.info(f"[DEBUG] Получен автоматический коммит: input_audio_buffer.committed")
+                    # Сбрасываем размер буфера в клиенте
+                    openai_client.audio_buffer_size = 0
                     continue
                 
                 # Завершение ответа - если функция не обработана должным образом, вставляем информацию
