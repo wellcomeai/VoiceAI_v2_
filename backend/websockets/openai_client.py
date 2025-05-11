@@ -403,7 +403,9 @@ class OpenAIRealtimeClient:
             }
         
         try:
-            # Правильная структура для отправки результата функции - убираем поле role
+            logger.info(f"[DEBUG-FUNCTION] Начало отправки результата функции: {function_call_id}")
+            
+            # Правильная структура для отправки результата функции
             payload = {
                 "type": "conversation.item.create",
                 "event_id": f"funcres_{time.time()}",
@@ -412,9 +414,10 @@ class OpenAIRealtimeClient:
                     "type": "function_call_output",
                     "call_id": function_call_id,
                     "name": self.last_function_name or function_call_id,
-                    "output": {  # Обязательное поле output
+                    "output": {  # Исправленная структура поля output
                         "type": "tool_result",
-                        "data": result
+                        "tool_call_id": function_call_id,
+                        "content": result
                     }
                 }
             }
@@ -425,8 +428,14 @@ class OpenAIRealtimeClient:
             await self.ws.send(json.dumps(payload))
             logger.info(f"Результат функции отправлен как item.create: {function_call_id}")
             
+            # Добавляем небольшую задержку перед запросом нового ответа
+            logger.info(f"[DEBUG-FUNCTION] Ожидание перед созданием нового ответа (500мс)")
+            await asyncio.sleep(0.5)  # 500 мс должно быть достаточно
+            
             # После отправки результата, явно запрашиваем новый ответ от модели
             await self.create_response_after_function()
+            
+            logger.info(f"[DEBUG-FUNCTION] Результат функции отправлен и запрос на новый ответ выполнен")
             
             return {
                 "success": True,
@@ -456,18 +465,26 @@ class OpenAIRealtimeClient:
             return False
             
         try:
-            # Запрашиваем новый ответ от модели с обязательным указанием модальностей
+            logger.info(f"[DEBUG-FUNCTION] Создание нового ответа после выполнения функции")
+            
+            # Запрашиваем новый ответ от модели с более полным набором параметров
             response_payload = {
                 "type": "response.create",
                 "event_id": f"resp_after_func_{time.time()}",
                 "response": {
                     "modalities": ["text", "audio"],
-                    "voice": self.assistant_config.voice or DEFAULT_VOICE
+                    "voice": self.assistant_config.voice or DEFAULT_VOICE,
+                    "instructions": getattr(self.assistant_config, "system_prompt", None) or DEFAULT_SYSTEM_MESSAGE,
+                    "temperature": 0.7,
+                    "max_output_tokens": 200
                 }
             }
             
             await self.ws.send(json.dumps(response_payload))
             logger.info("Запрошен новый ответ после выполнения функции")
+            
+            logger.info(f"[DEBUG-FUNCTION] Запрос на создание нового ответа отправлен успешно")
+            
             return True
             
         except Exception as e:
