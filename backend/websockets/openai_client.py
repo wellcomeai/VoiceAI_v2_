@@ -128,8 +128,6 @@ class OpenAIRealtimeClient:
         self.conversation_record_id: Optional[str] = None
         self.webhook_url = None  # Сохраняем URL вебхука из промпта
         self.last_function_name = None  # Сохраняем имя последней вызванной функции
-        self.audio_buffer_size = 0  # Отслеживаем размер буфера для проверки перед коммитом
-        self.server_vad_active = False  # Флаг активности Server VAD
         
         # Извлекаем URL вебхука из промпта при инициализации
         if hasattr(assistant_config, "system_prompt") and assistant_config.system_prompt:
@@ -216,7 +214,6 @@ class OpenAIRealtimeClient:
             
             self.is_connected = False
             self.ws = None
-            self.audio_buffer_size = 0  # Сбрасываем размер буфера при переподключении
             
             # Подключаемся заново
             return await self.connect()
@@ -244,20 +241,14 @@ class OpenAIRealtimeClient:
         if not self.is_connected or not self.ws:
             logger.error("Cannot update session: not connected")
             return False
-        
-        # Настройки для server_vad
-        # Важно: всегда включаем create_response: True, чтобы сервер обработал конец речи автоматически
-        # Это предотвратит ручную отправку пустых буферов
+            
         turn_detection = {
             "type": "server_vad",
             "threshold": 0.25,
             "prefix_padding_ms": 200,
             "silence_duration_ms": 300,
-            "create_response": True,  # Включаем автоматическую обработку
+            "create_response": True,
         }
-        
-        # Устанавливаем флаг что используем Server VAD
-        self.server_vad_active = True
         
         # Получаем нормализованные определения функций
         normalized_functions = normalize_functions(functions)
@@ -467,9 +458,6 @@ class OpenAIRealtimeClient:
         if not self.is_connected or not self.ws or not audio_buffer:
             return False
         try:
-            # Обновляем счетчик размера буфера
-            self.audio_buffer_size += len(audio_buffer)
-            
             data_b64 = base64.b64encode(audio_buffer).decode("utf-8")
             await self.ws.send(json.dumps({
                 "type": "input_audio_buffer.append",
@@ -480,10 +468,6 @@ class OpenAIRealtimeClient:
         except ConnectionClosed:
             logger.error("Connection closed while sending audio data")
             self.is_connected = False
-            # Пробуем сразу восстановить соединение
-            if await self.reconnect():
-                # Повторно отправляем последний аудио-буфер после восстановления соединения
-                return await self.process_audio(audio_buffer)
             return False
         except Exception as e:
             logger.error(f"Error processing audio: {e}")
@@ -498,35 +482,15 @@ class OpenAIRealtimeClient:
         """
         if not self.is_connected or not self.ws:
             return False
-            
         try:
-            # Если активен Server VAD, не нужно отправлять commit вручную
-            # Server VAD с create_response:true сам коммитит когда обнаружит тишину
-            if self.server_vad_active:
-                logger.info(f"Skipping manual commit - Server VAD active")
-                return True
-                
-            # Проверяем минимальный размер буфера перед коммитом (минимум 3200 байт ~ 100мс аудио)
-            if self.audio_buffer_size < 3200:
-                logger.warning(f"Audio buffer too small for commit: {self.audio_buffer_size} bytes")
-                # Избегаем ошибки input_audio_buffer_commit_empty, просто возвращаем True
-                return True
-                
             await self.ws.send(json.dumps({
                 "type": "input_audio_buffer.commit",
                 "event_id": f"commit_{time.time()}"
             }))
-            
-            # Сбрасываем размер буфера после коммита
-            self.audio_buffer_size = 0
-            
             return True
         except ConnectionClosed:
             logger.error("Connection closed while committing audio")
             self.is_connected = False
-            # Пробуем восстановить соединение и повторно отправить commit
-            if await self.reconnect():
-                return await self.commit_audio()
             return False
         except Exception as e:
             logger.error(f"Error committing audio: {e}")
@@ -546,16 +510,10 @@ class OpenAIRealtimeClient:
                 "type": "input_audio_buffer.clear",
                 "event_id": f"clear_{time.time()}"
             }))
-            
-            # Сбрасываем размер буфера после очистки
-            self.audio_buffer_size = 0
-            
             return True
         except ConnectionClosed:
             logger.error("Connection closed while clearing audio buffer")
             self.is_connected = False
-            # Пробуем восстановить соединение
-            await self.reconnect()
             return False
         except Exception as e:
             logger.error(f"Error clearing audio buffer: {e}")
