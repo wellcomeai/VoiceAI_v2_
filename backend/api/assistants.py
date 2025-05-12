@@ -2,22 +2,19 @@
 Assistant API endpoints for WellcomeAI application.
 """
 
-"""
-Assistant API endpoints for WellcomeAI application.
-"""
-
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from backend.core.logging import get_logger  # Изменен импорт core
-from backend.core.dependencies import get_current_user
+from backend.core.dependencies import get_current_user, check_subscription_active, check_assistant_limit
 from backend.db.session import get_db  # Уже корректный
 from backend.models.user import User  # Изменен импорт models
 from backend.schemas.assistant import AssistantCreate, AssistantUpdate, AssistantResponse, EmbedCodeResponse  # Изменен импорт schemas
 from backend.schemas.conversation import ConversationResponse, ConversationStats  # Изменен импорт schemas
 from backend.services.assistant_service import AssistantService  # Изменен импорт services
 from backend.services.conversation_service import ConversationService  # Изменен импорт services
+from backend.services.user_service import UserService  # Добавлен импорт
 from typing import Dict, Any
 
 
@@ -58,7 +55,7 @@ async def get_assistants(
 @router.post("/", response_model=AssistantResponse, status_code=status.HTTP_201_CREATED)
 async def create_assistant(
     assistant_data: AssistantCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_assistant_limit),  # Используем dependency для проверки лимита
     db: Session = Depends(get_db)
 ):
     """
@@ -73,6 +70,16 @@ async def create_assistant(
         AssistantResponse with the new assistant information
     """
     try:
+        # Проверка ограничений подписки
+        subscription_status = await UserService.check_subscription_status(db, str(current_user.id))
+        
+        # Дополнительная проверка, что подписка активна
+        if not subscription_status["active"]:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Active subscription required to create assistants"
+            )
+        
         return await AssistantService.create_assistant(db, str(current_user.id), assistant_data)
     except HTTPException:
         raise
@@ -134,7 +141,7 @@ async def get_assistant(
 async def update_assistant(
     assistant_data: AssistantUpdate,
     assistant_id: str = Path(..., description="The ID of the assistant to update"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_subscription_active),  # Используем dependency для проверки подписки
     db: Session = Depends(get_db)
 ):
     """
@@ -163,7 +170,7 @@ async def update_assistant(
 @router.delete("/{assistant_id}", response_model=dict)
 async def delete_assistant(
     assistant_id: str = Path(..., description="The ID of the assistant to delete"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_subscription_active),  # Используем dependency для проверки подписки
     db: Session = Depends(get_db)
 ):
     """
@@ -192,7 +199,7 @@ async def delete_assistant(
 @router.get("/{assistant_id}/embed-code", response_model=EmbedCodeResponse)
 async def get_embed_code(
     assistant_id: str = Path(..., description="The ID of the assistant"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_subscription_active),  # Используем dependency для проверки подписки
     db: Session = Depends(get_db)
 ):
     """
@@ -222,7 +229,7 @@ async def get_conversations(
     assistant_id: str = Path(..., description="The ID of the assistant"),
     skip: int = Query(0, ge=0, description="Number of conversations to skip"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of conversations to return"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_subscription_active),  # Используем dependency для проверки подписки
     db: Session = Depends(get_db)
 ):
     """
@@ -255,7 +262,7 @@ async def get_conversations(
 @router.get("/{assistant_id}/stats", response_model=ConversationStats)
 async def get_conversation_stats(
     assistant_id: str = Path(..., description="The ID of the assistant"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_subscription_active),  # Используем dependency для проверки подписки
     db: Session = Depends(get_db)
 ):
     """
@@ -288,7 +295,7 @@ async def get_conversation_stats(
 async def verify_google_sheet(
     sheet_data: Dict[str, str],
     assistant_id: str = Path(..., description="The ID of the assistant"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(check_subscription_active),  # Используем dependency для проверки подписки
     db: Session = Depends(get_db)
 ):
     """
