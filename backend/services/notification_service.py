@@ -3,7 +3,7 @@ Notification service for WellcomeAI application.
 Service for sending notifications to users about subscription status and other events.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from typing import Optional, Dict, Any
@@ -24,34 +24,36 @@ class NotificationService:
         Args:
             db: Database session
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         soon = now + timedelta(days=3)  # 3 days before expiration
         
         # Find users whose subscription expires in the next 3 days
         expiring_users = db.query(User).filter(
             and_(
-                User.subscription_end_date <= soon,
-                User.subscription_end_date > now,
+                User.subscription_end_date.isnot(None),
                 User.is_active == True,
                 User.email.isnot(None)
             )
         ).all()
         
         for user in expiring_users:
-            # Calculate days left
-            days_left = (user.subscription_end_date - now).days
-            
-            # Only send notice if we haven't recently sent one (implement logic to check this)
-            # For example, you could add a 'last_notified_at' column to the User model
-            # and only send if now - last_notified_at > timedelta(days=1)
-            
-            # Send notification by email
-            await NotificationService.send_subscription_expiration_notice(
-                user=user,
-                days_left=days_left
-            )
-            
-            logger.info(f"Sent subscription expiration notice to {user.email}, {days_left} days left")
+            # Ensure subscription_end_date is timezone-aware
+            end_date = user.subscription_end_date
+            if end_date.tzinfo is None:
+                end_date = end_date.replace(tzinfo=timezone.utc)
+                
+            # Check if it's in the expiring window (between now and soon)
+            if now < end_date <= soon:
+                # Calculate days left
+                days_left = (end_date - now).days
+                
+                # Send notification by email
+                await NotificationService.send_subscription_expiration_notice(
+                    user=user,
+                    days_left=days_left
+                )
+                
+                logger.info(f"Sent subscription expiration notice to {user.email}, {days_left} days left")
     
     @staticmethod
     async def send_subscription_expiration_notice(user: User, days_left: int):
@@ -68,10 +70,15 @@ class NotificationService:
             
             subject = f"Your subscription expires in {days_left} days"
             
+            # Ensure subscription_end_date is timezone-aware
+            end_date = user.subscription_end_date
+            if end_date.tzinfo is None:
+                end_date = end_date.replace(tzinfo=timezone.utc)
+            
             message = f"""
             Hello {user.first_name or user.email},
             
-            Your subscription to Live VoiceAI will expire in {days_left} days on {user.subscription_end_date.strftime('%Y-%m-%d')}.
+            Your subscription to Live VoiceAI will expire in {days_left} days on {end_date.strftime('%Y-%m-%d')}.
             
             To continue using all features, please renew your subscription before it expires.
             
@@ -108,6 +115,10 @@ class NotificationService:
             subscription_type = "trial" if is_trial else "subscription"
             
             subject = f"Your {subscription_type} to {plan_name} plan has started"
+            
+            # Ensure end_date is timezone-aware
+            if end_date.tzinfo is None:
+                end_date = end_date.replace(tzinfo=timezone.utc)
             
             message = f"""
             Hello {user.first_name or user.email},
