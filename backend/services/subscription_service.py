@@ -1,292 +1,23 @@
 """
 Subscription service for WellcomeAI application.
+Handles subscription management and tracking.
 """
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from typing import List, Optional, Dict, Any, Union
-from datetime import datetime, timedelta
+from typing import List, Optional, Dict, Any
+from datetime import datetime, timedelta, timezone
 import uuid
 
 from backend.core.logging import get_logger
-from backend.models.subscription import SubscriptionPlan
-from backend.models.subscription_log import SubscriptionLog  # Модель логов подписок
 from backend.models.user import User
-from backend.schemas.subscription import SubscriptionPlanCreate, SubscriptionPlanUpdate
+from backend.models.subscription import SubscriptionPlan, SubscriptionLog
 
 logger = get_logger(__name__)
 
 class SubscriptionService:
     """Service for subscription operations"""
-    
-    @staticmethod
-    async def log_subscription_event(
-        db: Session, 
-        user_id: str, 
-        action: str, 
-        plan_id: Optional[str] = None,
-        plan_code: Optional[str] = None,
-        details: Optional[str] = None
-    ) -> None:
-        """
-        Логирует событие, связанное с подпиской
-        
-        Args:
-            db: Сессия базы данных
-            user_id: ID пользователя
-            action: Тип события (subscribe, cancel, expire, renew, trial_activate)
-            plan_id: ID плана подписки (опционально)
-            plan_code: Код плана подписки (опционально)
-            details: Детали события (опционально)
-        """
-        try:
-            # Преобразуем строковые ID в UUID, если они предоставлены
-            user_uuid = None
-            plan_uuid = None
-            
-            try:
-                if user_id:
-                    user_uuid = uuid.UUID(user_id)
-                if plan_id:
-                    plan_uuid = uuid.UUID(plan_id)
-            except ValueError as e:
-                logger.error(f"Invalid UUID format: {str(e)}")
-                # Продолжаем без UUID, если они недействительны
-            
-            log_entry = SubscriptionLog(
-                user_id=user_uuid,
-                action=action,
-                plan_id=plan_uuid,
-                plan_code=plan_code,
-                details=details
-            )
-            
-            db.add(log_entry)
-            db.commit()
-            
-            logger.info(f"Subscription event logged: user_id={user_id}, action={action}")
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Error logging subscription event: {str(e)}")
-    
-    @staticmethod
-    async def get_subscription_plans(db: Session, include_inactive: bool = False) -> List[SubscriptionPlan]:
-        """
-        Get all subscription plans
-        
-        Args:
-            db: Database session
-            include_inactive: Whether to include inactive plans
-            
-        Returns:
-            List of subscription plans
-        """
-        query = db.query(SubscriptionPlan)
-        
-        if not include_inactive:
-            query = query.filter(SubscriptionPlan.is_active.is_(True))
-            
-        return query.all()
-    
-    @staticmethod
-    async def get_subscription_plan_by_id(db: Session, plan_id: str) -> SubscriptionPlan:
-        """
-        Get subscription plan by ID
-        
-        Args:
-            db: Database session
-            plan_id: Plan ID
-            
-        Returns:
-            Subscription plan
-        """
-        try:
-            # Преобразуем в UUID, если это строка
-            if isinstance(plan_id, str):
-                plan_id = uuid.UUID(plan_id)
-                
-            plan = db.query(SubscriptionPlan).get(plan_id)
-            
-            if not plan:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Subscription plan not found"
-                )
-                
-            return plan
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid plan ID format"
-            )
-    
-    @staticmethod
-    async def get_subscription_plan_by_code(db: Session, plan_code: str) -> SubscriptionPlan:
-        """
-        Get subscription plan by code
-        
-        Args:
-            db: Database session
-            plan_code: Plan code
-            
-        Returns:
-            Subscription plan
-        """
-        plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.code == plan_code).first()
-        
-        if not plan:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Subscription plan with code {plan_code} not found"
-            )
-            
-        return plan
-    
-    @staticmethod
-    async def create_subscription_plan(db: Session, plan_data: SubscriptionPlanCreate) -> SubscriptionPlan:
-        """
-        Create a new subscription plan
-        
-        Args:
-            db: Database session
-            plan_data: Plan creation data
-            
-        Returns:
-            Created subscription plan
-        """
-        try:
-            # Check if a plan with this code already exists
-            existing_plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.code == plan_data.code).first()
-            if existing_plan:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Subscription plan with code {plan_data.code} already exists"
-                )
-            
-            # Create plan
-            # Используем dict для Pydantic v1 или model_dump для v2
-            if hasattr(plan_data, 'dict'):
-                plan_dict = plan_data.dict()
-            else:
-                plan_dict = plan_data.model_dump()
-                
-            plan = SubscriptionPlan(**plan_dict)
-            db.add(plan)
-            db.commit()
-            db.refresh(plan)
-            
-            logger.info(f"Created subscription plan: {plan.id}, code: {plan.code}")
-            return plan
-            
-        except IntegrityError as e:
-            db.rollback()
-            logger.error(f"Database integrity error during plan creation: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Subscription plan creation failed due to database constraint"
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Unexpected error during plan creation: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Subscription plan creation failed due to server error"
-            )
-    
-    @staticmethod
-    async def update_subscription_plan(
-        db: Session, 
-        plan_id: str, 
-        plan_data: SubscriptionPlanUpdate
-    ) -> SubscriptionPlan:
-        """
-        Update subscription plan
-        
-        Args:
-            db: Database session
-            plan_id: Plan ID
-            plan_data: Plan update data
-            
-        Returns:
-            Updated subscription plan
-        """
-        try:
-            plan = await SubscriptionService.get_subscription_plan_by_id(db, plan_id)
-            
-            # Update only provided fields
-            # Используем dict для Pydantic v1 или model_dump для v2
-            if hasattr(plan_data, 'dict'):
-                update_data = plan_data.dict(exclude_unset=True)
-            else:
-                update_data = plan_data.model_dump(exclude_unset=True)
-                
-            for key, value in update_data.items():
-                setattr(plan, key, value)
-            
-            db.commit()
-            db.refresh(plan)
-            
-            logger.info(f"Updated subscription plan: {plan.id}")
-            return plan
-            
-        except IntegrityError as e:
-            db.rollback()
-            logger.error(f"Database integrity error during plan update: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Subscription plan update failed due to database constraint"
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Unexpected error during plan update: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Subscription plan update failed due to server error"
-            )
-    
-    @staticmethod
-    async def delete_subscription_plan(db: Session, plan_id: str) -> bool:
-        """
-        Delete subscription plan
-        
-        Args:
-            db: Database session
-            plan_id: Plan ID
-            
-        Returns:
-            True if deletion was successful
-        """
-        try:
-            plan = await SubscriptionService.get_subscription_plan_by_id(db, plan_id)
-            
-            # Check if any users are using this plan
-            users_with_plan = db.query(User).filter(User.subscription_plan_id == plan.id).count()
-            if users_with_plan > 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Cannot delete plan with active users. Deactivate it instead."
-                )
-            
-            db.delete(plan)
-            db.commit()
-            
-            logger.info(f"Deleted subscription plan: {plan_id}")
-            return True
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Error deleting subscription plan: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to delete subscription plan"
-            )
     
     @staticmethod
     async def activate_trial(db: Session, user_id: str, trial_days: int = 3) -> Optional[User]:
@@ -345,7 +76,7 @@ class SubscriptionService:
                 db.flush()  # Получаем ID без коммита
             
             # Set trial period
-            now = datetime.now()
+            now = datetime.now(timezone.utc)  # Используем UTC для согласованности
             user.is_trial = True
             user.subscription_start_date = now
             user.subscription_end_date = now + timedelta(days=trial_days)
@@ -390,7 +121,7 @@ class SubscriptionService:
             logger.error(f"Error activating trial: {str(e)}")
             # Не выбрасываем исключение, чтобы не блокировать регистрацию
             return None
-            
+    
     @staticmethod
     async def check_expired_subscriptions(db: Session) -> int:
         """
@@ -403,14 +134,24 @@ class SubscriptionService:
             Количество обновленных подписок
         """
         try:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)  # Используем UTC для согласованности
             
             # Находим пользователей с истекшими подписками
-            expired_users = db.query(User).filter(
-                User.subscription_end_date < now,
+            # Получаем всех пользователей с подписками и фильтруем вручную из-за проблем с таймзонами
+            potential_expired = db.query(User).filter(
                 User.subscription_end_date.isnot(None),
                 User.is_trial.is_(True)  # Пока работаем только с триальными подписками
             ).all()
+            
+            # Фильтруем с учетом таймзон
+            expired_users = []
+            for user in potential_expired:
+                end_date = user.subscription_end_date
+                if end_date.tzinfo is None:
+                    end_date = end_date.replace(tzinfo=timezone.utc)
+                    
+                if end_date < now:
+                    expired_users.append(user)
             
             updated_count = 0
             
@@ -440,3 +181,83 @@ class SubscriptionService:
             db.rollback()
             logger.error(f"Error checking expired subscriptions: {str(e)}")
             return 0
+    
+    @staticmethod
+    async def log_subscription_event(
+        db: Session, 
+        user_id: str, 
+        action: str, 
+        plan_id: Optional[str] = None, 
+        plan_code: Optional[str] = None, 
+        details: Optional[str] = None
+    ) -> Optional[SubscriptionLog]:
+        """
+        Log subscription event in the database
+        
+        Args:
+            db: Database session
+            user_id: User ID
+            action: Action performed (subscribe, trial_activate, expire, etc)
+            plan_id: Subscription plan ID if applicable
+            plan_code: Subscription plan code if applicable
+            details: Additional details about the event
+            
+        Returns:
+            Created log entry or None on error
+        """
+        try:
+            log_entry = SubscriptionLog(
+                user_id=user_id,
+                action=action,
+                plan_id=plan_id,
+                plan_code=plan_code,
+                details=details,
+                created_at=datetime.now(timezone.utc)  # Используем UTC для согласованности
+            )
+            
+            db.add(log_entry)
+            db.commit()
+            db.refresh(log_entry)
+            
+            logger.debug(f"Subscription event logged: {action} for user {user_id}")
+            return log_entry
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error logging subscription event: {str(e)}")
+            return None
+    
+    @staticmethod
+    async def get_subscription_logs(db: Session, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Get subscription logs for a user
+        
+        Args:
+            db: Database session
+            user_id: User ID
+            
+        Returns:
+            List of subscription log entries
+        """
+        try:
+            logs = db.query(SubscriptionLog).filter(
+                SubscriptionLog.user_id == user_id
+            ).order_by(SubscriptionLog.created_at.desc()).all()
+            
+            result = []
+            for log in logs:
+                result.append({
+                    "id": str(log.id),
+                    "user_id": str(log.user_id),
+                    "action": log.action,
+                    "plan_id": str(log.plan_id) if log.plan_id else None,
+                    "plan_code": log.plan_code,
+                    "details": log.details,
+                    "created_at": log.created_at
+                })
+                
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting subscription logs: {str(e)}")
+            return []
