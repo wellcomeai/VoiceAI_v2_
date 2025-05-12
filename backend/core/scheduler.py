@@ -4,7 +4,7 @@ Contains background tasks for checking subscription expirations and other recurr
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from backend.db.session import SessionLocal
@@ -19,18 +19,30 @@ async def check_expired_subscriptions():
     """
     db = SessionLocal()
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)  # Используем UTC для согласованности
         
         # Find users with expired subscriptions
+        # В SQL запросе нельзя учесть таймзоны, поэтому обработаем их после
         expired_users = db.query(User).filter(
             and_(
-                User.subscription_end_date <= now,
                 User.subscription_end_date.isnot(None),
                 or_(User.is_trial == True, User.subscription_plan_id.isnot(None))
             )
         ).all()
         
+        # Фильтруем пользователей, чьи подписки истекли, с учетом таймзон
+        actual_expired = []
         for user in expired_users:
+            if user.subscription_end_date:
+                # Приводим дату окончания к UTC, если у нее нет таймзоны
+                end_date = user.subscription_end_date
+                if end_date.tzinfo is None:
+                    end_date = end_date.replace(tzinfo=timezone.utc)
+                
+                if end_date <= now:
+                    actual_expired.append(user)
+        
+        for user in actual_expired:
             # Log the expiration event
             from backend.services.subscription_service import SubscriptionService
             await SubscriptionService.log_subscription_event(
@@ -52,7 +64,7 @@ async def check_expired_subscriptions():
             logger.info(f"Subscription expired for user {user.id}, email: {user.email}")
             
         db.commit()
-        logger.info(f"Updated {len(expired_users)} expired subscriptions")
+        logger.info(f"Updated {len(actual_expired)} expired subscriptions")
         
         # Check for subscriptions that are about to expire and send notifications
         from backend.services.notification_service import NotificationService
