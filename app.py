@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from backend.core.config import settings
 from backend.core.logging import setup_logging, get_logger
-from backend.api import auth, users, assistants, files, websocket, healthcheck, subscriptions, subscription_logs
+from backend.api import auth, users, assistants, files, websocket, healthcheck, subscriptions, subscription_logs, admin
 from backend.models.base import create_tables
 from backend.db.session import engine
 from backend.core.scheduler import start_subscription_checker
@@ -45,14 +45,26 @@ app.include_router(websocket.router, tags=["WebSocket"])
 app.include_router(healthcheck.router, tags=["Health"])
 app.include_router(subscriptions.router, prefix="/api/subscriptions", tags=["Subscriptions"])
 app.include_router(subscription_logs.router, prefix="/api/subscription-logs", tags=["Subscription Logs"])
+app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])  # Убедитесь, что этот роутер подключен
 
 # Check and create directories for static files
 static_dir = os.path.join(os.getcwd(), "backend/static")
 if not os.path.exists(static_dir):
     os.makedirs(static_dir)
     logger.info(f"Created static directory at {static_dir}")
+
+# Проверка наличия директории /js для решения проблемы с twint_ch.js
+js_dir = os.path.join(static_dir, "js")
+if not os.path.exists(js_dir):
+    os.makedirs(js_dir)
+    logger.info(f"Created js directory at {js_dir}")
+
 # Mount static files from backend/static directory
 app.mount("/static", StaticFiles(directory="backend/static"), name="static")
+
+# Можно также примонтировать /js напрямую для решения проблемы с twint_ch.js
+app.mount("/js", StaticFiles(directory=js_dir), name="js")
+
 # Application startup handler
 @app.on_event("startup")
 async def startup_event():
