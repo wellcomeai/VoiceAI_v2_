@@ -254,15 +254,15 @@ class UserService:
             user = await UserService.get_user_by_id(db, user_id)
             
             # Администраторы всегда имеют активную подписку
-            if user.is_admin:
+            # Проверка на админа через email
+            if user.is_admin or user.email == "well96well@gmail.com":
                 return {
                     "active": True,
                     "is_trial": False,
                     "days_left": None,
-                    "max_assistants": float('inf'),  # Без ограничений
-                    "max_files": float('inf'),       # Без ограничений для файлов
-                    "max_file_size": 100 * 1024 * 1024,  # 100 MB
-                    "features": ["all"]              # Все функции
+                    "max_assistants": 10,  # Фиксированное количество для админа
+                    "current_assistants": 0,  # Для корректного отображения в UI
+                    "features": ["all"]      # Все функции
                 }
                 
             # Проверяем, есть ли активная подписка
@@ -274,19 +274,16 @@ class UserService:
             )
             
             # Получаем максимальное количество ассистентов из плана подписки
-            max_assistants = 1  # Default for free plan
-            max_files = 3       # Default for free plan
-            max_file_size = 5 * 1024 * 1024  # 5 MB default
-            features = ["basic"]  # Basic features by default
+            max_assistants = 1  # Default для тестового периода
 
             if user.subscription_plan_id:
                 plan = db.query(SubscriptionPlan).get(user.subscription_plan_id)
                 if plan:
-                    max_assistants = plan.max_assistants
-                    # Добавляем дополнительные поля из модели SubscriptionPlan
-                    max_files = getattr(plan, 'max_files', 10)  # По умолчанию 10
-                    max_file_size = getattr(plan, 'max_file_size', 10 * 1024 * 1024)  # 10 MB
-                    features = getattr(plan, 'features', ['basic'])  # Базовые функции
+                    # Устанавливаем лимиты в зависимости от кода плана
+                    if plan.code == "free":
+                        max_assistants = 1  # Тестовый период
+                    else:
+                        max_assistants = 3  # Оплаченный период (любой, кроме free)
             
             # Вычисляем, сколько дней осталось
             days_left = None
@@ -294,13 +291,9 @@ class UserService:
                 delta = user.subscription_end_date - now
                 days_left = max(0, delta.days)
             
-            # Получаем текущее количество ресурсов
+            # Получаем текущее количество ассистентов
             current_assistants = db.query(AssistantConfig).filter(
                 AssistantConfig.user_id == user.id
-            ).count()
-
-            current_files = db.query(File).filter(
-                File.user_id == user.id
             ).count()
             
             return {
@@ -308,11 +301,8 @@ class UserService:
                 "is_trial": user.is_trial if has_active_subscription else False,
                 "days_left": days_left,
                 "max_assistants": max_assistants if has_active_subscription else 1,
-                "max_files": max_files if has_active_subscription else 3,
-                "max_file_size": max_file_size if has_active_subscription else 5 * 1024 * 1024,
-                "features": features if has_active_subscription else ["basic"],
                 "current_assistants": current_assistants,
-                "current_files": current_files
+                "features": ["basic"]
             }
             
         except Exception as e:
@@ -323,11 +313,8 @@ class UserService:
                 "is_trial": False,
                 "days_left": 0,
                 "max_assistants": 1,
-                "max_files": 3,
-                "max_file_size": 5 * 1024 * 1024,
-                "features": ["basic"],
                 "current_assistants": 0,
-                "current_files": 0
+                "features": ["basic"]
             }
 
     @staticmethod
