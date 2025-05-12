@@ -313,4 +313,82 @@ async def update_user_subscription(
 @router.get("/stats", response_model=Dict[str, Any])
 async def get_admin_statistics(
     current_user: User = Depends(check_admin_access),
-    db: Session =
+    db: Session = Depends(get_db)
+):
+    """
+    Get system-wide statistics for admin dashboard.
+    Admin only endpoint.
+    
+    Args:
+        current_user: Current authenticated admin user
+        db: Database session dependency
+    
+    Returns:
+        System statistics
+    """
+    try:
+        # Get user counts
+        total_users = db.query(User).count()
+        active_users = db.query(User).filter(User.is_active.is_(True)).count()
+        
+        now = datetime.now()
+        users_with_active_subscription = db.query(User).filter(
+            User.subscription_end_date > now
+        ).count()
+        
+        trial_users = db.query(User).filter(User.is_trial.is_(True)).count()
+        
+        # Get assistant counts
+        total_assistants = db.query(AssistantConfig).count()
+        
+        # Get recent users
+        recent_users = db.query(User).order_by(
+            User.created_at.desc()
+        ).limit(5).all()
+        
+        recent_user_data = []
+        for user in recent_users:
+            recent_user_data.append({
+                "id": str(user.id),
+                "email": user.email,
+                "created_at": user.created_at,
+                "is_trial": user.is_trial
+            })
+        
+        # Assistant statistics by user
+        # This is a more complex query that groups by user
+        from sqlalchemy import func
+        assistant_stats = db.query(
+            AssistantConfig.user_id,
+            func.count(AssistantConfig.id).label("assistant_count")
+        ).group_by(AssistantConfig.user_id).all()
+        
+        max_assistants = 0
+        if assistant_stats:
+            max_assistants = max(stat[1] for stat in assistant_stats)
+        
+        avg_assistants = 0
+        if total_users > 0:
+            avg_assistants = total_assistants / total_users
+        
+        return {
+            "users": {
+                "total": total_users,
+                "active": active_users,
+                "with_subscription": users_with_active_subscription,
+                "trial": trial_users,
+                "recent": recent_user_data
+            },
+            "assistants": {
+                "total": total_assistants,
+                "max_per_user": max_assistants,
+                "avg_per_user": round(avg_assistants, 2)
+            },
+            "timestamp": datetime.now()
+        }
+    except Exception as e:
+        logger.error(f"Error in get_admin_statistics: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve admin statistics"
+        )
