@@ -6,12 +6,13 @@ Handles user account management operations.
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 
 from backend.core.logging import get_logger
 from backend.models.user import User
 from backend.models.assistant import AssistantConfig  # Правильный импорт модели
+from backend.models.file import File  # Добавлен импорт для файлов
 from backend.models.subscription import SubscriptionPlan # Добавлен импорт для подписок
 from backend.schemas.user import UserUpdate, UserResponse, UserDetailResponse
 
@@ -238,7 +239,7 @@ class UserService:
             logger.error(f"Error adding usage tokens: {str(e)}")
     
     @staticmethod
-    async def check_subscription_status(db: Session, user_id: str) -> dict:
+    async def check_subscription_status(db: Session, user_id: str) -> Dict[str, Any]:
         """
         Проверить статус подписки пользователя
         
@@ -258,7 +259,10 @@ class UserService:
                     "active": True,
                     "is_trial": False,
                     "days_left": None,
-                    "max_assistants": float('inf')  # Без ограничений
+                    "max_assistants": float('inf'),  # Без ограничений
+                    "max_files": float('inf'),       # Без ограничений для файлов
+                    "max_file_size": 100 * 1024 * 1024,  # 100 MB
+                    "features": ["all"]              # Все функции
                 }
                 
             # Проверяем, есть ли активная подписка
@@ -270,11 +274,19 @@ class UserService:
             )
             
             # Получаем максимальное количество ассистентов из плана подписки
-            max_assistants = 0
+            max_assistants = 1  # Default for free plan
+            max_files = 3       # Default for free plan
+            max_file_size = 5 * 1024 * 1024  # 5 MB default
+            features = ["basic"]  # Basic features by default
+
             if user.subscription_plan_id:
                 plan = db.query(SubscriptionPlan).get(user.subscription_plan_id)
                 if plan:
                     max_assistants = plan.max_assistants
+                    # Добавляем дополнительные поля из модели SubscriptionPlan
+                    max_files = getattr(plan, 'max_files', 10)  # По умолчанию 10
+                    max_file_size = getattr(plan, 'max_file_size', 10 * 1024 * 1024)  # 10 MB
+                    features = getattr(plan, 'features', ['basic'])  # Базовые функции
             
             # Вычисляем, сколько дней осталось
             days_left = None
@@ -282,11 +294,25 @@ class UserService:
                 delta = user.subscription_end_date - now
                 days_left = max(0, delta.days)
             
+            # Получаем текущее количество ресурсов
+            current_assistants = db.query(AssistantConfig).filter(
+                AssistantConfig.user_id == user.id
+            ).count()
+
+            current_files = db.query(File).filter(
+                File.user_id == user.id
+            ).count()
+            
             return {
                 "active": has_active_subscription,
                 "is_trial": user.is_trial if has_active_subscription else False,
                 "days_left": days_left,
-                "max_assistants": max_assistants if has_active_subscription else 0
+                "max_assistants": max_assistants if has_active_subscription else 1,
+                "max_files": max_files if has_active_subscription else 3,
+                "max_file_size": max_file_size if has_active_subscription else 5 * 1024 * 1024,
+                "features": features if has_active_subscription else ["basic"],
+                "current_assistants": current_assistants,
+                "current_files": current_files
             }
             
         except Exception as e:
@@ -296,7 +322,12 @@ class UserService:
                 "active": False,
                 "is_trial": False,
                 "days_left": 0,
-                "max_assistants": 0
+                "max_assistants": 1,
+                "max_files": 3,
+                "max_file_size": 5 * 1024 * 1024,
+                "features": ["basic"],
+                "current_assistants": 0,
+                "current_files": 0
             }
 
     @staticmethod
