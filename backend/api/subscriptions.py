@@ -11,6 +11,7 @@ from backend.core.logging import get_logger
 from backend.core.dependencies import get_current_user
 from backend.db.session import get_db
 from backend.models.user import User
+from backend.models.assistant import AssistantConfig
 from backend.models.subscription import SubscriptionPlan
 from backend.schemas.subscription import UserSubscriptionInfo
 
@@ -43,16 +44,33 @@ async def get_my_subscription(
         
         # Calculate days left
         days_left = None
-        if current_user.subscription_end_date and current_user.subscription_end_date > datetime.now():
-            delta = current_user.subscription_end_date - datetime.now()
+        subscription_end_date = current_user.subscription_end_date
+        if subscription_end_date and subscription_end_date > datetime.now():
+            delta = subscription_end_date - datetime.now()
             days_left = delta.days
+        else:
+            # Если дата окончания в прошлом или не установлена, устанавливаем дату окончания в None
+            # чтобы избежать возвращения Unix "нулевого времени" (01.01.1970)
+            subscription_end_date = None
+            days_left = 0
         
-        # Provide fallback values for empty database
-        max_assistants = 1
-        if subscription_plan:
-            max_assistants = subscription_plan.max_assistants
-        elif current_user.is_admin:
-            max_assistants = 999
+        # Provide correct values for max_assistants
+        max_assistants = 1  # Default для тестового периода
+        
+        # Проверка на админа
+        if current_user.is_admin or current_user.email == "well96well@gmail.com":
+            max_assistants = 10
+        elif subscription_plan:
+            # Для обычных пользователей
+            if subscription_plan.code == "free":
+                max_assistants = 1  # Тестовый период
+            else:
+                max_assistants = 3  # Оплаченные тарифы
+        
+        # Get current assistants count
+        current_assistants = db.query(AssistantConfig).filter(
+            AssistantConfig.user_id == current_user.id
+        ).count()
         
         # Default trial plan if no plan is set
         plan_info = {
@@ -68,7 +86,7 @@ async def get_my_subscription(
                 "code": subscription_plan.code,
                 "name": subscription_plan.name,
                 "price": float(subscription_plan.price) if hasattr(subscription_plan, "price") else 0,
-                "max_assistants": subscription_plan.max_assistants,
+                "max_assistants": max_assistants,  # Используем определенный выше max_assistants
                 "description": subscription_plan.description
             }
             
@@ -76,10 +94,11 @@ async def get_my_subscription(
         return {
             "subscription_plan": plan_info,
             "subscription_start_date": current_user.subscription_start_date,
-            "subscription_end_date": current_user.subscription_end_date,
+            "subscription_end_date": subscription_end_date,  # Может быть None, но не вызовет проблем с отображением
             "is_trial": current_user.is_trial,
             "days_left": days_left,
-            "active": True if days_left or current_user.is_admin else False
+            "active": True if days_left or current_user.is_admin or current_user.email == "well96well@gmail.com" else False,
+            "current_assistants": current_assistants
         }
     except Exception as e:
         logger.error(f"Unexpected error in get_my_subscription: {str(e)}")
@@ -128,7 +147,7 @@ async def get_subscription_plans(
                     "code": "start",
                     "name": "Start",
                     "price": 19.99,
-                    "max_assistants": 5,
+                    "max_assistants": 3,  # Изменили с 5 на 3
                     "description": "Start plan with extended features",
                     "is_active": True
                 },
@@ -136,7 +155,7 @@ async def get_subscription_plans(
                     "code": "pro",
                     "name": "Professional",
                     "price": 49.99,
-                    "max_assistants": 20,
+                    "max_assistants": 10,  # Изменили с 20 на 10
                     "description": "Professional plan with all features",
                     "is_active": True
                 }
@@ -145,12 +164,18 @@ async def get_subscription_plans(
         # Format plans
         result = []
         for plan in plans:
+            # Определяем max_assistants в зависимости от кода плана
+            if plan.code == "free":
+                max_assistants = 1
+            else:
+                max_assistants = 3
+                
             result.append({
                 "id": str(plan.id),
                 "code": plan.code,
                 "name": plan.name,
                 "price": float(plan.price) if hasattr(plan, "price") else 0,
-                "max_assistants": plan.max_assistants,
+                "max_assistants": max_assistants,  # Используем определенный выше max_assistants
                 "description": plan.description,
                 "is_active": plan.is_active
             })
@@ -189,13 +214,8 @@ async def subscribe_to_plan(
         # If plan not found in database, use defaults
         if not plan:
             if plan_code == "free":
-                max_assistants = 1
                 is_trial = True
-            elif plan_code == "start":
-                max_assistants = 5
-                is_trial = False
-            elif plan_code == "pro":
-                max_assistants = 20
+            elif plan_code == "start" or plan_code == "pro":
                 is_trial = False
             else:
                 raise HTTPException(
@@ -203,7 +223,6 @@ async def subscribe_to_plan(
                     detail=f"Plan with code {plan_code} not found"
                 )
         else:
-            max_assistants = plan.max_assistants
             is_trial = plan_code == "free"
         
         # Update user subscription
@@ -216,6 +235,17 @@ async def subscribe_to_plan(
             current_user.subscription_plan_id = plan.id
         
         db.commit()
+        
+        # Log subscription change
+        from backend.services.subscription_service import SubscriptionService
+        await SubscriptionService.log_subscription_event(
+            db=db,
+            user_id=str(current_user.id),
+            action="subscribe",
+            plan_id=str(plan.id) if plan else None,
+            plan_code=plan_code,
+            details=f"Subscription activated for {duration_days} days until {current_user.subscription_end_date.strftime('%Y-%m-%d')}"
+        )
         
         # Get updated subscription info
         return await get_my_subscription(current_user, db)
