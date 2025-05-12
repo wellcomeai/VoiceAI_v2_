@@ -5,7 +5,7 @@ Subscription API endpoints for WellcomeAI application.
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import traceback
 
 from backend.core.logging import get_logger
@@ -40,7 +40,7 @@ async def get_my_subscription(
     try:
         # Проверяем, что у пользователя есть даты подписки
         # Если нет - возможно, стоит создать триальную подписку
-        now = datetime.now()
+        now = datetime.now(timezone.utc)  # Используем UTC для согласованности
         if not current_user.subscription_start_date or not current_user.subscription_end_date:
             try:
                 # Импортируем здесь, чтобы избежать циклических импортов
@@ -67,11 +67,24 @@ async def get_my_subscription(
         days_left = None
         subscription_end_date = current_user.subscription_end_date
         
-        if subscription_end_date and subscription_end_date > now:
-            delta = subscription_end_date - now
-            days_left = delta.days
+        if subscription_end_date:
+            # Приводим обе даты к одному типу (с таймзоной)
+            # Если subscription_end_date не содержит информацию о таймзоне
+            if subscription_end_date.tzinfo is None:
+                subscription_end_date = subscription_end_date.replace(tzinfo=timezone.utc)
+            
+            # Если now не содержит информацию о таймзоне
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=timezone.utc)
+                
+            # Проверяем, активна ли подписка и вычисляем оставшиеся дни
+            if subscription_end_date > now:
+                delta = subscription_end_date - now
+                days_left = delta.days
+            else:
+                days_left = 0
         else:
-            # Если дата окончания в прошлом или не установлена, подписка неактивна
+            # Если дата окончания не установлена, подписка неактивна
             days_left = 0
         
         # Provide correct values for max_assistants
@@ -141,7 +154,7 @@ async def get_my_subscription(
         
         # Возвращаем базовую информацию вместо ошибки
         # Это позволит фронтенду корректно отображать что-то вместо ошибки
-        now = datetime.now()
+        now = datetime.now(timezone.utc)  # Используем UTC
         trial_end = now + timedelta(days=3)
         
         return {
@@ -316,12 +329,18 @@ async def subscribe_to_plan(
             is_trial = plan_code == "free"
         
         # Если пользователь уже имеет активную подписку, продлеваем её
-        now = datetime.now()
+        now = datetime.now(timezone.utc)  # Используем UTC для согласованности
         start_date = now
         
         # Если есть действующая подписка - продлеваем от её даты окончания
-        if current_user.subscription_end_date and current_user.subscription_end_date > now:
-            start_date = current_user.subscription_end_date
+        if current_user.subscription_end_date:
+            # Нормализуем дату
+            end_date = current_user.subscription_end_date
+            if end_date.tzinfo is None:
+                end_date = end_date.replace(tzinfo=timezone.utc)
+                
+            if end_date > now:
+                start_date = end_date
         
         # Update user subscription
         current_user.subscription_start_date = start_date
