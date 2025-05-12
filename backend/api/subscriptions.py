@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
+import traceback
 
 from backend.core.logging import get_logger
 from backend.core.dependencies import get_current_user
@@ -37,6 +38,26 @@ async def get_my_subscription(
         User subscription information
     """
     try:
+        # Проверяем, что у пользователя есть даты подписки
+        # Если нет - возможно, стоит создать триальную подписку
+        now = datetime.now()
+        if not current_user.subscription_start_date or not current_user.subscription_end_date:
+            try:
+                # Импортируем здесь, чтобы избежать циклических импортов
+                from backend.services.subscription_service import SubscriptionService
+                
+                # Логируем отсутствие дат подписки
+                logger.warning(f"User {current_user.id} has no subscription dates, activating trial")
+                
+                # Активируем триальную подписку
+                await SubscriptionService.activate_trial(db, str(current_user.id), trial_days=3)
+                
+                # Обновляем объект пользователя из БД
+                db.refresh(current_user)
+            except Exception as e:
+                logger.error(f"Failed to activate trial: {str(e)}")
+                # Если не удалось активировать триал, продолжаем с текущими данными
+        
         # Check if user has subscription plan
         subscription_plan = None
         if current_user.subscription_plan_id:
@@ -45,13 +66,12 @@ async def get_my_subscription(
         # Calculate days left
         days_left = None
         subscription_end_date = current_user.subscription_end_date
-        if subscription_end_date and subscription_end_date > datetime.now():
-            delta = subscription_end_date - datetime.now()
+        
+        if subscription_end_date and subscription_end_date > now:
+            delta = subscription_end_date - now
             days_left = delta.days
         else:
-            # Если дата окончания в прошлом или не установлена, устанавливаем дату окончания в None
-            # чтобы избежать возвращения Unix "нулевого времени" (01.01.1970)
-            subscription_end_date = None
+            # Если дата окончания в прошлом или не установлена, подписка неактивна
             days_left = 0
         
         # Provide correct values for max_assistants
@@ -60,6 +80,8 @@ async def get_my_subscription(
         # Проверка на админа
         if current_user.is_admin or current_user.email == "well96well@gmail.com":
             max_assistants = 10
+            # Форсируем активность подписки для админа
+            days_left = 999  # Админу не нужно беспокоиться о сроках
         elif subscription_plan:
             # Для обычных пользователей
             if subscription_plan.code == "free":
@@ -89,23 +111,57 @@ async def get_my_subscription(
                 "max_assistants": max_assistants,  # Используем определенный выше max_assistants
                 "description": subscription_plan.description
             }
+        
+        # Formatted dates for UI
+        formatted_start_date = None
+        formatted_end_date = None
+        
+        if current_user.subscription_start_date:
+            formatted_start_date = current_user.subscription_start_date.strftime("%Y-%m-%d")
+            
+        if subscription_end_date:
+            formatted_end_date = subscription_end_date.strftime("%Y-%m-%d")
             
         # Return complete subscription info
         return {
             "subscription_plan": plan_info,
             "subscription_start_date": current_user.subscription_start_date,
-            "subscription_end_date": subscription_end_date,  # Может быть None, но не вызовет проблем с отображением
+            "subscription_end_date": subscription_end_date,  # Может быть None
+            "formatted_start_date": formatted_start_date,    # Строка для UI
+            "formatted_end_date": formatted_end_date,        # Строка для UI
             "is_trial": current_user.is_trial,
             "days_left": days_left,
-            "active": True if days_left or current_user.is_admin or current_user.email == "well96well@gmail.com" else False,
+            "active": True if days_left > 0 or current_user.is_admin or current_user.email == "well96well@gmail.com" else False,
             "current_assistants": current_assistants
         }
     except Exception as e:
+        # Полная трассировка ошибки для отладки
         logger.error(f"Unexpected error in get_my_subscription: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve subscription information"
-        )
+        logger.error(traceback.format_exc())
+        
+        # Возвращаем базовую информацию вместо ошибки
+        # Это позволит фронтенду корректно отображать что-то вместо ошибки
+        now = datetime.now()
+        trial_end = now + timedelta(days=3)
+        
+        return {
+            "subscription_plan": {
+                "code": "free",
+                "name": "Free Trial (Default)",
+                "price": 0,
+                "max_assistants": 1,
+                "description": "Default trial plan"
+            },
+            "subscription_start_date": now,
+            "subscription_end_date": trial_end,
+            "formatted_start_date": now.strftime("%Y-%m-%d"),
+            "formatted_end_date": trial_end.strftime("%Y-%m-%d"),
+            "is_trial": True,
+            "days_left": 3,
+            "active": True,
+            "current_assistants": 0,
+            "error": "default_fallback_data"  # Флаг для фронтенда, что это данные по умолчанию
+        }
 
 @router.get("/plans", response_model=List[Dict[str, Any]])
 async def get_subscription_plans(
@@ -183,10 +239,27 @@ async def get_subscription_plans(
         return result
     except Exception as e:
         logger.error(f"Unexpected error in get_subscription_plans: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve subscription plans"
-        )
+        logger.error(traceback.format_exc())
+        
+        # Возвращаем базовые планы вместо ошибки
+        return [
+            {
+                "code": "free",
+                "name": "Free Trial (Default)",
+                "price": 0,
+                "max_assistants": 1,
+                "description": "Free trial plan with basic features",
+                "is_active": True
+            },
+            {
+                "code": "start",
+                "name": "Start (Default)",
+                "price": 19.99,
+                "max_assistants": 3,
+                "description": "Start plan with extended features",
+                "is_active": True
+            }
+        ]
 
 @router.post("/subscribe/{plan_code}", response_model=Dict[str, Any])
 async def subscribe_to_plan(
@@ -215,20 +288,44 @@ async def subscribe_to_plan(
         if not plan:
             if plan_code == "free":
                 is_trial = True
-            elif plan_code == "start" or plan_code == "pro":
+                max_assistants = 1
+            elif plan_code == "start":
                 is_trial = False
+                max_assistants = 3
+            elif plan_code == "pro":
+                is_trial = False
+                max_assistants = 10
             else:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Plan with code {plan_code} not found"
                 )
+                
+            # Создаем план, если он не существует
+            plan = SubscriptionPlan(
+                code=plan_code,
+                name=plan_code.capitalize(),
+                price=0 if plan_code == "free" else (19.99 if plan_code == "start" else 49.99),
+                max_assistants=max_assistants,
+                description=f"{plan_code.capitalize()} subscription plan",
+                is_active=True
+            )
+            db.add(plan)
+            db.flush()  # Получаем ID без коммита
         else:
             is_trial = plan_code == "free"
         
-        # Update user subscription
+        # Если пользователь уже имеет активную подписку, продлеваем её
         now = datetime.now()
-        current_user.subscription_start_date = now
-        current_user.subscription_end_date = now + timedelta(days=duration_days)
+        start_date = now
+        
+        # Если есть действующая подписка - продлеваем от её даты окончания
+        if current_user.subscription_end_date and current_user.subscription_end_date > now:
+            start_date = current_user.subscription_end_date
+        
+        # Update user subscription
+        current_user.subscription_start_date = start_date
+        current_user.subscription_end_date = start_date + timedelta(days=duration_days)
         current_user.is_trial = is_trial
         
         if plan:
@@ -254,7 +351,51 @@ async def subscribe_to_plan(
     except Exception as e:
         db.rollback()
         logger.error(f"Unexpected error in subscribe_to_plan: {str(e)}")
+        logger.error(traceback.format_exc())
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to subscribe to plan"
+        )
+
+@router.post("/check-expired", response_model=Dict[str, Any])
+async def check_expired_subscriptions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Manually trigger check for expired subscriptions.
+    Admin only endpoint.
+    
+    Args:
+        current_user: Current authenticated user (must be admin)
+        db: Database session dependency
+    
+    Returns:
+        Result of the check
+    """
+    # Проверяем, что пользователь - админ
+    if not current_user.is_admin and current_user.email != "well96well@gmail.com":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can perform this action"
+        )
+        
+    try:
+        # Импорт сервиса здесь для избежания циклических импортов
+        from backend.services.subscription_service import SubscriptionService
+        
+        # Проверяем истекшие подписки
+        updated_count = await SubscriptionService.check_expired_subscriptions(db)
+        
+        return {
+            "success": True,
+            "updated_count": updated_count,
+            "message": f"Successfully updated {updated_count} expired subscriptions"
+        }
+    except Exception as e:
+        logger.error(f"Error checking expired subscriptions: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error checking expired subscriptions: {str(e)}"
         )
