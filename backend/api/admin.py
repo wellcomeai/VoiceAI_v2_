@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from backend.core.logging import get_logger
 from backend.core.dependencies import get_current_user, check_admin_access
@@ -61,7 +61,7 @@ async def get_all_users(
         
         # Apply subscription status filter
         if subscription_status:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)  # Используем UTC для согласованности
             if subscription_status == "active":
                 query = query.filter(User.subscription_end_date > now)
             elif subscription_status == "expired":
@@ -71,7 +71,7 @@ async def get_all_users(
                 )
             elif subscription_status == "trial":
                 query = query.filter(User.is_trial.is_(True))
-                
+        
         # Get total count before pagination
         total_count = query.count()
                 
@@ -111,7 +111,6 @@ async def get_all_users(
             
             result.append(user_data)
         
-        # Add pagination metadata as HTTP headers
         return result
     except Exception as e:
         logger.error(f"Error in get_all_users: {str(e)}")
@@ -197,6 +196,7 @@ async def get_user_details(
                 "start_date": user.subscription_start_date,
                 "end_date": user.subscription_end_date,
                 "is_active": subscription_status["active"],
+                "max_assistants": subscription_status.get("max_assistants", 1),
                 "days_left": subscription_status.get("days_left", 0)
             },
             "assistants": {
@@ -260,7 +260,7 @@ async def update_user_subscription(
             db.flush()
             
         # Set start date (either now or extend from current subscription)
-        now = datetime.now()
+        now = datetime.now(timezone.utc)  # Используем UTC для согласованности
         start_date = now
         
         if user.subscription_end_date and user.subscription_end_date > now:
@@ -331,7 +331,7 @@ async def get_admin_statistics(
         total_users = db.query(User).count()
         active_users = db.query(User).filter(User.is_active.is_(True)).count()
         
-        now = datetime.now()
+        now = datetime.now(timezone.utc)  # Используем UTC для согласованности
         users_with_active_subscription = db.query(User).filter(
             User.subscription_end_date > now
         ).count()
@@ -384,7 +384,7 @@ async def get_admin_statistics(
                 "max_per_user": max_assistants,
                 "avg_per_user": round(avg_assistants, 2)
             },
-            "timestamp": datetime.now()
+            "timestamp": datetime.now(timezone.utc)
         }
     except Exception as e:
         logger.error(f"Error in get_admin_statistics: {str(e)}")
