@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 import uuid
 
 from backend.core.logging import get_logger
-from backend.core.dependencies import get_current_user, get_current_active_admin
+from backend.core.dependencies import get_current_user, check_admin_access
 from backend.db.session import get_db
 from backend.models.user import User
 from backend.models.subscription_log import SubscriptionLog
@@ -61,7 +61,7 @@ async def get_all_subscription_logs(
     limit: int = 100,
     user_id: Optional[str] = None,
     action: Optional[str] = None,
-    current_user: User = Depends(get_current_active_admin),
+    current_user: User = Depends(check_admin_access),
     db: Session = Depends(get_db)
 ):
     """
