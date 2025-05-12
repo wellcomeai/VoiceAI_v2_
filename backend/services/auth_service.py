@@ -4,10 +4,11 @@ Handles user authentication, registration, and token management.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+import traceback
 
 from backend.core.logging import get_logger
 from backend.core.security import hash_password, verify_password, create_jwt_token
@@ -48,6 +49,10 @@ class AuthService:
             # Hash the password
             hashed_password = hash_password(user_data.password)
             
+            # Устанавливаем даты подписки прямо при создании пользователя
+            now = datetime.now()
+            trial_end = now + timedelta(days=3)
+            
             # Create new user
             new_user = User(
                 email=user_data.email,
@@ -55,7 +60,11 @@ class AuthService:
                 first_name=user_data.first_name,
                 last_name=user_data.last_name,
                 company_name=user_data.company_name,
-                subscription_plan="free"
+                subscription_plan="free",
+                # Устанавливаем даты подписки сразу
+                subscription_start_date=now,
+                subscription_end_date=trial_end,
+                is_trial=True
             )
             
             # Set admin flag for special email
@@ -68,11 +77,17 @@ class AuthService:
             db.refresh(new_user)
             
             # Activate trial for non-admin users
+            # Это установит связь с таблицей планов подписки
             if not new_user.is_admin:
-                # Подключаем сервис подписок для активации пробного периода
-                from backend.services.subscription_service import SubscriptionService
-                await SubscriptionService.activate_trial(db, str(new_user.id), trial_days=3)
-                logger.info(f"Trial period activated for user {new_user.email}")
+                try:
+                    # Подключаем сервис подписок для активации пробного периода
+                    from backend.services.subscription_service import SubscriptionService
+                    await SubscriptionService.activate_trial(db, str(new_user.id), trial_days=3)
+                    logger.info(f"Trial period activated for user {new_user.email}")
+                except Exception as e:
+                    # Логируем ошибку, но продолжаем процесс регистрации
+                    # Даты уже установлены выше
+                    logger.error(f"Error activating trial (continuing registration): {str(e)}")
             
             # Create token
             token = create_jwt_token(str(new_user.id))
@@ -99,7 +114,6 @@ class AuthService:
                     subscription_end_date=new_user.subscription_end_date
                 )
             }
-        
         except IntegrityError as e:
             db.rollback()
             logger.error(f"Database integrity error during registration: {str(e)}")
@@ -112,6 +126,7 @@ class AuthService:
         except Exception as e:
             db.rollback()
             logger.error(f"Unexpected error during registration: {str(e)}")
+            logger.error(traceback.format_exc())
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Registration failed due to server error"
@@ -152,6 +167,24 @@ class AuthService:
                     detail="Account is disabled"
                 )
             
+            # Проверяем, есть ли у пользователя даты подписки
+            # Если нет, устанавливаем триальный период
+            now = datetime.now()
+            if not user.subscription_start_date or not user.subscription_end_date:
+                logger.warning(f"User {user.id} logged in without subscription dates, setting trial period")
+                
+                user.subscription_start_date = now
+                user.subscription_end_date = now + timedelta(days=3)
+                user.is_trial = True
+                
+                # Пытаемся активировать триальную подписку через сервис
+                try:
+                    from backend.services.subscription_service import SubscriptionService
+                    await SubscriptionService.activate_trial(db, str(user.id), trial_days=3)
+                except Exception as e:
+                    logger.error(f"Error activating trial during login (continuing): {str(e)}")
+                    # Продолжаем вход без активации
+            
             # Update last login timestamp
             user.last_login = datetime.utcnow()
             db.commit()
@@ -186,6 +219,7 @@ class AuthService:
             raise
         except Exception as e:
             logger.error(f"Unexpected error during login: {str(e)}")
+            logger.error(traceback.format_exc())
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Login failed due to server error"
@@ -223,6 +257,7 @@ class AuthService:
         
         except Exception as e:
             logger.error(f"Error in password reset request: {str(e)}")
+            logger.error(traceback.format_exc())
             # Still return True to not reveal if email exists
             return True
     
@@ -274,6 +309,7 @@ class AuthService:
         except Exception as e:
             db.rollback()
             logger.error(f"Error changing password: {str(e)}")
+            logger.error(traceback.format_exc())
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to change password"
