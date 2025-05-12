@@ -1357,115 +1357,106 @@
       }
       
       // Загрузка информации о подписке
-      async function loadSubscriptionInfo() {
-  try {
-    const subscriptionInfo = await api.get('/subscriptions/my-subscription');
-    
-    const subscriptionDetails = document.getElementById('subscription-details');
-    const upgradeSection = document.getElementById('subscription-upgrade');
-    
-    if (subscriptionInfo.subscription_plan) {
-      // Рассчитываем процент оставшегося времени
-      const daysLeft = subscriptionInfo.days_left || 0;
-      const totalDays = 30; // Предполагаем 30-дневный цикл
-      const percentLeft = Math.min(100, Math.round((daysLeft / totalDays) * 100));
-      
-      let statusClass = 'active';
-      let statusText = 'Активна';
-      
-      if (subscriptionInfo.is_trial) {
-        statusClass = 'trial';
-        statusText = 'Пробный период';
-      }
-      
-      // Добавляем предупреждение, если осталось мало дней
-      let warningHtml = '';
-      if (daysLeft <= 3 && daysLeft > 0) {
-        warningHtml = `
-          <div class="subscription-warning">
-            <i class="fas fa-exclamation-triangle"></i>
-            Ваша подписка истекает через ${daysLeft} ${getDayWord(daysLeft)}!
-          </div>
+      // dashboard.html - обновляем функцию loadSubscriptionInfo
+async function loadSubscriptionInfo() {
+    try {
+        const subscriptionInfo = await api.get('/subscriptions/my-subscription');
+        
+        const subscriptionDetails = document.getElementById('subscription-details');
+        const upgradeSection = document.getElementById('subscription-upgrade');
+        
+        // Проверяем наличие подписки и корректность данных
+        if (subscriptionInfo.subscription_plan) {
+            // Форматируем дату - проверка, что дата существует
+            let endDateDisplay = 'Не указана';
+            if (subscriptionInfo.subscription_end_date) {
+                try {
+                    // Проверяем, что дата - валидная дата
+                    const endDate = new Date(subscriptionInfo.subscription_end_date);
+                    if (!isNaN(endDate.getTime())) {
+                        endDateDisplay = endDate.toLocaleDateString('ru-RU');
+                    }
+                } catch (e) {
+                    console.error('Ошибка форматирования даты:', e);
+                }
+            }
+            
+            // Показываем информацию о подписке
+            let statusClass = 'active';
+            let statusText = 'Активна';
+            
+            if (subscriptionInfo.is_trial) {
+                statusClass = 'trial';
+                statusText = 'Пробный период';
+            }
+            
+            subscriptionDetails.innerHTML = `
+                <div class="subscription-info">
+                    <div class="subscription-plan">
+                        <h3>${subscriptionInfo.subscription_plan.name}</h3>
+                        <span class="subscription-status ${statusClass}">${statusText}</span>
+                    </div>
+                    
+                    <div class="subscription-details-grid">
+                        <div class="subscription-detail">
+                            <span class="detail-label">Дата окончания:</span>
+                            <span class="detail-value">${endDateDisplay}</span>
+                        </div>
+                        
+                        <div class="subscription-detail">
+                            <span class="detail-label">Осталось дней:</span>
+                            <span class="detail-value">${subscriptionInfo.days_left || 0}</span>
+                        </div>
+                        
+                        <div class="subscription-detail">
+                            <span class="detail-label">Макс. ассистентов:</span>
+                            <span class="detail-value">${subscriptionInfo.subscription_plan.max_assistants}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Показываем кнопку апгрейда для всех, кроме максимального тарифа
+            if (subscriptionInfo.subscription_plan.code !== 'pro') {
+                upgradeSection.style.display = 'flex';
+            } else {
+                upgradeSection.style.display = 'none';
+            }
+        } else {
+            // Нет активной подписки или данные некорректны
+            subscriptionDetails.innerHTML = `
+                <div class="subscription-empty">
+                    <p>В настоящий момент у вас активирован базовый план. 
+                       Приобретите тариф "Старт" для доступа ко всем функциям.</p>
+                </div>
+            `;
+            upgradeSection.style.display = 'flex';
+        }
+        
+        // Если была ошибка и мы показали это - скрыть индикатор загрузки
+        const loadingIndicator = document.querySelector('.subscription-loading');
+        if (loadingIndicator) {
+            loadingIndicator.style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Ошибка при загрузке информации о подписке:', error);
+        
+        // Более дружественное сообщение с кнопкой повтора
+        document.getElementById('subscription-details').innerHTML = `
+            <div class="subscription-error">
+                <p>Не удалось загрузить информацию о подписке.</p>
+                <button class="btn btn-secondary retry-button" onclick="loadSubscriptionInfo()">
+                    <i class="fas fa-sync-alt"></i> Повторить
+                </button>
+            </div>
         `;
-      } else if (daysLeft <= 0) {
-        warningHtml = `
-          <div class="subscription-warning expired">
-            <i class="fas fa-exclamation-circle"></i>
-            Ваша подписка истекла!
-          </div>
-        `;
-      }
-      
-      // Проверяем наличие даты окончания перед преобразованием
-      const endDate = subscriptionInfo.subscription_end_date 
-        ? new Date(subscriptionInfo.subscription_end_date).toLocaleDateString('ru-RU')
-        : 'Не указана';
-      
-      subscriptionDetails.innerHTML = `
-        <div class="subscription-info">
-          <div class="subscription-plan">
-            <h3>${subscriptionInfo.subscription_plan.name}</h3>
-            <span class="subscription-status ${statusClass}">${statusText}</span>
-          </div>
-          
-          ${warningHtml}
-          
-          <div class="subscription-progress">
-            <div class="progress-bar">
-              <div class="progress-fill" style="width: ${percentLeft}%"></div>
-            </div>
-            <div class="progress-text">${daysLeft} ${getDayWord(daysLeft)} осталось</div>
-          </div>
-          
-          <div class="subscription-details-grid">
-            <div class="subscription-detail">
-              <span class="detail-label">Дата окончания:</span>
-              <span class="detail-value">${endDate}</span>
-            </div>
-            
-            <div class="subscription-detail">
-              <span class="detail-label">Макс. ассистентов:</span>
-              <span class="detail-value">${subscriptionInfo.max_assistants || 1}</span>
-            </div>
-            
-            <div class="subscription-detail">
-              <span class="detail-label">Использовано:</span>
-              <span class="detail-value">${subscriptionInfo.current_assistants || 0} / ${subscriptionInfo.max_assistants || 1}</span>
-            </div>
-            
-            <!-- Убраны поля для макс. файлов и макс. размера файла -->
-          </div>
-        </div>
-      `;
-      
-      // Показываем кнопку апгрейда для бесплатного тарифа или пробного периода
-      if (subscriptionInfo.subscription_plan.code === 'free' || subscriptionInfo.is_trial) {
-        upgradeSection.style.display = 'block';
-      } else {
-        upgradeSection.style.display = 'none';
-      }
-    } else {
-      // Нет активной подписки
-      subscriptionDetails.innerHTML = `
-        <div class="subscription-empty">
-          <div class="subscription-warning expired">
-            <i class="fas fa-exclamation-circle"></i>
-            У вас нет активной подписки
-          </div>
-          <p>Приобретите тариф "Старт" для доступа ко всем функциям платформы.</p>
-        </div>
-      `;
-      upgradeSection.style.display = 'block';
+        
+        // Логируем в консоль больше информации для отладки
+        if (error.response) {
+            console.error('Статус ответа:', error.response.status);
+            console.error('Данные ответа:', error.response.data);
+        }
     }
-  } catch (error) {
-    console.error('Ошибка при загрузке информации о подписке:', error);
-    document.getElementById('subscription-details').innerHTML = `
-      <div class="subscription-error">
-        <p>Не удалось загрузить информацию о подписке. Пожалуйста, попробуйте позже.</p>
-        <button class="btn btn-secondary" onclick="loadSubscriptionInfo()">Повторить</button>
-      </div>
-    `;
-  }
 }
       
       // Мобильное меню
