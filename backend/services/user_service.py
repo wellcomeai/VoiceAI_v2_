@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from backend.core.logging import get_logger
 from backend.models.user import User
@@ -266,11 +266,17 @@ class UserService:
                 }
                 
             # Проверяем, есть ли активная подписка
-            now = datetime.now()
+            now = datetime.now(timezone.utc)  # Используем UTC для согласованности
+            
+            # Нормализуем дату окончания подписки
+            subscription_end_date = user.subscription_end_date
+            if subscription_end_date and subscription_end_date.tzinfo is None:
+                subscription_end_date = subscription_end_date.replace(tzinfo=timezone.utc)
+                
             has_active_subscription = (
                 user.subscription_plan_id is not None and
-                user.subscription_end_date is not None and
-                user.subscription_end_date > now
+                subscription_end_date is not None and
+                subscription_end_date > now
             )
             
             # Получаем максимальное количество ассистентов из плана подписки
@@ -287,8 +293,8 @@ class UserService:
             
             # Вычисляем, сколько дней осталось
             days_left = None
-            if user.subscription_end_date and has_active_subscription:
-                delta = user.subscription_end_date - now
+            if subscription_end_date and has_active_subscription:
+                delta = subscription_end_date - now
                 days_left = max(0, delta.days)
             
             # Получаем текущее количество ассистентов
@@ -343,7 +349,7 @@ class UserService:
                 )
             
             # Устанавливаем даты начала и окончания подписки
-            now = datetime.now()
+            now = datetime.now(timezone.utc)  # Используем UTC для согласованности
             user.subscription_plan_id = subscription_plan.id
             user.subscription_start_date = now
             user.subscription_end_date = now + timedelta(days=duration_days)
