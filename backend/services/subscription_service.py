@@ -5,11 +5,13 @@ Subscription service for WellcomeAI application.
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
+import uuid
 
 from backend.core.logging import get_logger
 from backend.models.subscription import SubscriptionPlan
+from backend.models.subscription_log import SubscriptionLog  # Добавлен импорт модели логов
 from backend.models.user import User
 from backend.schemas.subscription import SubscriptionPlanCreate, SubscriptionPlanUpdate
 
@@ -17,6 +19,43 @@ logger = get_logger(__name__)
 
 class SubscriptionService:
     """Service for subscription operations"""
+    
+    @staticmethod
+    async def log_subscription_event(
+        db: Session, 
+        user_id: str, 
+        action: str, 
+        plan_id: Optional[str] = None,
+        plan_code: Optional[str] = None,
+        details: Optional[str] = None
+    ) -> None:
+        """
+        Логирует событие, связанное с подпиской
+        
+        Args:
+            db: Сессия базы данных
+            user_id: ID пользователя
+            action: Тип события (subscribe, cancel, expire, renew)
+            plan_id: ID плана подписки (опционально)
+            plan_code: Код плана подписки (опционально)
+            details: Детали события (опционально)
+        """
+        try:
+            log_entry = SubscriptionLog(
+                user_id=uuid.UUID(user_id),
+                action=action,
+                plan_id=uuid.UUID(plan_id) if plan_id else None,
+                plan_code=plan_code,
+                details=details
+            )
+            
+            db.add(log_entry)
+            db.commit()
+            
+            logger.info(f"Subscription event logged: user_id={user_id}, action={action}")
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error logging subscription event: {str(e)}")
     
     @staticmethod
     async def get_subscription_plans(db: Session, include_inactive: bool = False) -> List[SubscriptionPlan]:
@@ -249,6 +288,26 @@ class SubscriptionService:
             
             db.commit()
             db.refresh(user)
+            
+            # Логирование активации пробного периода
+            await SubscriptionService.log_subscription_event(
+                db=db,
+                user_id=str(user.id),
+                action="trial_activate",
+                plan_id=str(trial_plan.id) if trial_plan else None,
+                plan_code="free",
+                details=f"Trial activated for {trial_days} days until {user.subscription_end_date.strftime('%Y-%m-%d')}"
+            )
+            
+            # Отправка уведомления о начале пробного периода
+            from backend.services.notification_service import NotificationService
+            plan_name = trial_plan.name if trial_plan else "Free Trial"
+            await NotificationService.send_subscription_started_notice(
+                user=user,
+                plan_name=plan_name,
+                end_date=user.subscription_end_date,
+                is_trial=True
+            )
             
             logger.info(f"Activated trial for user {user_id} until {user.subscription_end_date}")
             return user
