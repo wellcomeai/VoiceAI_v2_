@@ -699,6 +699,58 @@
       justify-content: flex-end;
     }
     
+    /* Новые стили для подписки */
+    .subscription-progress {
+      margin: 1rem 0;
+    }
+
+    .progress-bar {
+      height: 8px;
+      background-color: var(--border-color);
+      border-radius: var(--radius-full);
+      overflow: hidden;
+      margin-bottom: 0.5rem;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #10b981, #3b82f6);
+      border-radius: var(--radius-full);
+    }
+
+    .progress-text {
+      font-size: 0.875rem;
+      color: var(--text-gray);
+      text-align: right;
+    }
+
+    .subscription-warning {
+      background-color: rgba(249, 115, 22, 0.1);
+      color: #f97316;
+      padding: 0.75rem 1rem;
+      border-radius: var(--radius-md);
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 500;
+    }
+
+    .subscription-warning.expired {
+      background-color: rgba(239, 68, 68, 0.1);
+      color: #ef4444;
+    }
+
+    .subscription-warning i {
+      font-size: 1.25rem;
+    }
+
+    .subscription-error {
+      padding: 1rem;
+      color: var(--text-gray);
+      text-align: center;
+    }
+
     /* Адаптивный дизайн */
     @media (max-width: 1024px) {
       .stats-grid {
@@ -869,9 +921,11 @@
       </div>
       
       <!-- Секция для информации о подписке -->
-      <div class="card" id="subscription-section">
-        <div class="card-header">
-          <h2 class="card-title">Ваша подписка</h2>
+      <div class="subscription-section">
+        <div class="section-header">
+          <h2 class="section-title">
+            <i class="fas fa-crown"></i> Ваша подписка
+          </h2>
         </div>
         
         <div class="subscription-details" id="subscription-details">
@@ -1284,6 +1338,24 @@
         }
       }
       
+      // Функция для склонения дней
+      function getDayWord(days) {
+        if (days % 10 === 1 && days % 100 !== 11) {
+          return 'день';
+        } else if ([2, 3, 4].includes(days % 10) && ![12, 13, 14].includes(days % 100)) {
+          return 'дня';
+        } else {
+          return 'дней';
+        }
+      }
+      
+      // Форматирование размера файла
+      function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' Б';
+        else if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' КБ';
+        else return (bytes / (1024 * 1024)).toFixed(1) + ' МБ';
+      }
+      
       // Загрузка информации о подписке
       async function loadSubscriptionInfo() {
         try {
@@ -1293,13 +1365,35 @@
           const upgradeSection = document.getElementById('subscription-upgrade');
           
           if (subscriptionInfo.subscription_plan) {
-            // Показываем информацию о подписке
+            // Рассчитываем процент оставшегося времени
+            const daysLeft = subscriptionInfo.days_left || 0;
+            const totalDays = 30; // Предполагаем 30-дневный цикл, можно получать с бэкенда
+            const percentLeft = Math.min(100, Math.round((daysLeft / totalDays) * 100));
+            
             let statusClass = 'active';
             let statusText = 'Активна';
             
             if (subscriptionInfo.is_trial) {
               statusClass = 'trial';
               statusText = 'Пробный период';
+            }
+            
+            // Добавляем предупреждение, если осталось мало дней
+            let warningHtml = '';
+            if (daysLeft <= 3 && daysLeft > 0) {
+              warningHtml = `
+                <div class="subscription-warning">
+                  <i class="fas fa-exclamation-triangle"></i>
+                  Ваша подписка истекает через ${daysLeft} ${getDayWord(daysLeft)}!
+                </div>
+              `;
+            } else if (daysLeft <= 0) {
+              warningHtml = `
+                <div class="subscription-warning expired">
+                  <i class="fas fa-exclamation-circle"></i>
+                  Ваша подписка истекла!
+                </div>
+              `;
             }
             
             const endDate = new Date(subscriptionInfo.subscription_end_date).toLocaleDateString('ru-RU');
@@ -1311,6 +1405,15 @@
                   <span class="subscription-status ${statusClass}">${statusText}</span>
                 </div>
                 
+                ${warningHtml}
+                
+                <div class="subscription-progress">
+                  <div class="progress-bar">
+                    <div class="progress-fill" style="width: ${percentLeft}%"></div>
+                  </div>
+                  <div class="progress-text">${daysLeft} ${getDayWord(daysLeft)} осталось</div>
+                </div>
+                
                 <div class="subscription-details-grid">
                   <div class="subscription-detail">
                     <span class="detail-label">Дата окончания:</span>
@@ -1318,19 +1421,29 @@
                   </div>
                   
                   <div class="subscription-detail">
-                    <span class="detail-label">Осталось дней:</span>
-                    <span class="detail-value">${subscriptionInfo.days_left || 0}</span>
+                    <span class="detail-label">Макс. ассистентов:</span>
+                    <span class="detail-value">${subscriptionInfo.subscription_plan.max_assistants}</span>
                   </div>
                   
                   <div class="subscription-detail">
-                    <span class="detail-label">Макс. ассистентов:</span>
-                    <span class="detail-value">${subscriptionInfo.subscription_plan.max_assistants}</span>
+                    <span class="detail-label">Использовано:</span>
+                    <span class="detail-value">${subscriptionInfo.current_assistants || 0} / ${subscriptionInfo.subscription_plan.max_assistants}</span>
+                  </div>
+                  
+                  <div class="subscription-detail">
+                    <span class="detail-label">Макс. файлов:</span>
+                    <span class="detail-value">${subscriptionInfo.max_files || 10}</span>
+                  </div>
+                  
+                  <div class="subscription-detail">
+                    <span class="detail-label">Макс. размер файла:</span>
+                    <span class="detail-value">${formatFileSize(subscriptionInfo.max_file_size || 10485760)}</span>
                   </div>
                 </div>
               </div>
             `;
             
-            // Показываем кнопку апгрейда только для бесплатного тарифа или если это пробный период
+            // Показываем кнопку апгрейда если это бесплатный тариф или пробный
             if (subscriptionInfo.subscription_plan.code === 'free' || subscriptionInfo.is_trial) {
               upgradeSection.style.display = 'block';
             } else {
@@ -1340,13 +1453,23 @@
             // Нет активной подписки
             subscriptionDetails.innerHTML = `
               <div class="subscription-empty">
-                <p>У вас нет активной подписки. Приобретите тариф "Старт" для доступа ко всем функциям.</p>
+                <div class="subscription-warning expired">
+                  <i class="fas fa-exclamation-circle"></i>
+                  У вас нет активной подписки
+                </div>
+                <p>Приобретите тариф "Старт" для доступа ко всем функциям платформы.</p>
               </div>
             `;
             upgradeSection.style.display = 'block';
           }
         } catch (error) {
           console.error('Ошибка при загрузке информации о подписке:', error);
+          document.getElementById('subscription-details').innerHTML = `
+            <div class="subscription-error">
+              <p>Не удалось загрузить информацию о подписке. Пожалуйста, попробуйте позже.</p>
+              <button class="btn btn-secondary" onclick="loadSubscriptionInfo()">Повторить</button>
+            </div>
+          `;
         }
       }
       
