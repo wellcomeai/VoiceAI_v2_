@@ -4,7 +4,7 @@ Handles user authentication, registration, and token management.
 """
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -50,7 +50,7 @@ class AuthService:
             hashed_password = hash_password(user_data.password)
             
             # Устанавливаем даты подписки прямо при создании пользователя
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             trial_end = now + timedelta(days=3)
             
             # Create new user
@@ -169,7 +169,7 @@ class AuthService:
             
             # Проверяем, есть ли у пользователя даты подписки
             # Если нет, устанавливаем триальный период
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             if not user.subscription_start_date or not user.subscription_end_date:
                 logger.warning(f"User {user.id} logged in without subscription dates, setting trial period")
                 
@@ -186,7 +186,7 @@ class AuthService:
                     # Продолжаем вход без активации
             
             # Update last login timestamp
-            user.last_login = datetime.utcnow()
+            user.last_login = now
             db.commit()
             
             # Create token
