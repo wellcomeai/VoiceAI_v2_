@@ -355,3 +355,88 @@ async def send_webhook(args, assistant_config=None, client_id=None):
     except Exception as e:
         logger.error(f"Ошибка при отправке вебхука: {e}")
         return {"error": f"Webhook error: {str(e)}"}
+        # Добавить в существующий файл
+
+# Добавить определение функции в FUNCTION_DEFINITIONS
+FUNCTION_DEFINITIONS = {
+    # ... существующие функции ...
+    "search_knowledge": {
+        "name": "search_knowledge",
+        "description": "Поиск в базе знаний агента",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Запрос для поиска в базе знаний"
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Количество результатов для возврата",
+                    "default": 5
+                }
+            },
+            "required": ["query"]
+        }
+    }
+}
+
+# Регистрация функции search_knowledge
+@register_function("search_knowledge")
+async def search_knowledge(args, assistant_config=None, client_id=None):
+    """
+    Выполняет поиск в базе знаний агента.
+    
+    Args:
+        args: Аргументы функции:
+            - query: Запрос для поиска
+            - top_k: Количество результатов (по умолчанию 5)
+        assistant_config: Конфигурация ассистента
+        client_id: ID клиента
+        
+    Returns:
+        Результаты поиска
+    """
+    try:
+        from backend.services.knowledge_base_service import KnowledgeBaseService
+        from backend.db.session import SessionLocal
+        
+        query = args.get("query")
+        top_k = args.get("top_k", 5)
+        
+        if not query:
+            return {"error": "Query is required"}
+        
+        if not assistant_config or not assistant_config.id:
+            return {"error": "Assistant ID is required"}
+        
+        assistant_id = str(assistant_config.id)
+        
+        # Get user's OpenAI API key
+        db = SessionLocal()
+        try:
+            user = None
+            if assistant_config.user_id:
+                from backend.models.user import User
+                user = db.query(User).filter(User.id == assistant_config.user_id).first()
+            
+            api_key = user.openai_api_key if user else None
+            
+            # Perform search
+            results = await KnowledgeBaseService.search_knowledge_base(
+                query=query,
+                assistant_id=assistant_id,
+                top_k=top_k,
+                user_api_key=api_key
+            )
+            
+            return {
+                "results": results,
+                "count": len(results),
+                "query": query
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error searching knowledge base: {e}")
+        return {"error": str(e), "results": []}
