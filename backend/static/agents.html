@@ -863,6 +863,131 @@
     .sheet-tips li {
       margin-bottom: 0.5rem;
     }
+
+    /* Стили для базы знаний */
+    .kb-documents {
+      margin-top: 1.5rem;
+    }
+
+    .documents-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+    }
+
+    .documents-table th,
+    .documents-table td {
+      padding: 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .documents-table th {
+      background-color: var(--bg-light);
+      font-weight: 600;
+      color: var(--text-dark);
+    }
+
+    .documents-table tr:hover {
+      background-color: var(--bg-light);
+    }
+
+    .btn-sm {
+      padding: 0.3rem 0.5rem;
+      font-size: 0.75rem;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 0.25rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+    }
+
+    .status-pending {
+      background-color: #FEF3C7;
+      color: #92400E;
+    }
+
+    .status-processed {
+      background-color: #D1FAE5;
+      color: #065F46;
+    }
+
+    .status-error {
+      background-color: #FEE2E2;
+      color: #B91C1C;
+    }
+
+    .error-tooltip {
+      color: #EF4444;
+      cursor: help;
+      margin-left: 0.5rem;
+    }
+
+    .limits-status {
+      margin-bottom: 1.5rem;
+    }
+
+    .limit-item {
+      margin-bottom: 0.5rem;
+    }
+
+    .limit-label {
+      font-size: 0.875rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .limit-bar {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .progress-bar {
+      flex: 1;
+      height: 8px;
+      background-color: var(--bg-light);
+      border-radius: 9999px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background-color: var(--primary-blue);
+      border-radius: 9999px;
+      transition: width 0.3s ease;
+    }
+
+    .limit-value {
+      font-size: 0.875rem;
+      color: var(--text-gray);
+      min-width: 80px;
+      text-align: right;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 2rem 1rem;
+    }
+
+    .empty-icon {
+      font-size: 2.5rem;
+      color: var(--text-light);
+      margin-bottom: 1rem;
+    }
+
+    .empty-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .empty-description {
+      color: var(--text-gray);
+      max-width: 400px;
+      margin: 0 auto;
+    }
   </style>
 </head>
 <body>
@@ -946,6 +1071,7 @@
           <div class="tab" data-tab="testing">Тестирование</div>
           <div class="tab" data-tab="embed">Встраивание</div>
           <div class="tab" data-tab="functions">Функции</div>
+          <div class="tab" data-tab="knowledge-base">База знаний</div>
         </div>
         
         <!-- Таб настроек -->
@@ -1185,6 +1311,78 @@
             </div>
           </div>
         </div>
+        
+        <!-- Таб базы знаний -->
+        <div class="tab-content" id="knowledge-base-tab">
+          <div class="form-section">
+            <h3 style="margin-bottom: 1rem;">База знаний ассистента</h3>
+            <p>Загрузите текстовые документы, чтобы ассистент мог отвечать на вопросы на их основе.</p>
+            
+            <div class="limits-status" style="margin-top: 1.5rem; margin-bottom: 1.5rem;">
+              <div class="limit-item">
+                <div class="limit-label">Документов:</div>
+                <div class="limit-bar">
+                  <div class="progress-bar">
+                    <div class="progress-fill" id="kb-docs-progress" style="width: 0%"></div>
+                  </div>
+                  <div class="limit-value" id="kb-docs-count">0 / 10</div>
+                </div>
+              </div>
+              <div class="limit-item">
+                <div class="limit-label">Символов:</div>
+                <div class="limit-bar">
+                  <div class="progress-bar">
+                    <div class="progress-fill" id="kb-chars-progress" style="width: 0%"></div>
+                  </div>
+                  <div class="limit-value" id="kb-chars-count">0 / 1 000 000</div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="kb-actions" style="display: flex; gap: 1rem; margin-bottom: 1rem;">
+              <input type="file" id="kb-file-input" style="display: none;" accept=".txt,.pdf,.docx,.md,.rtf">
+              <button class="btn btn-primary" id="kb-upload-btn">
+                <i class="fas fa-upload"></i> Загрузить файл
+              </button>
+              <button class="btn btn-outline" id="kb-sync-btn">
+                <i class="fas fa-sync"></i> Синхронизировать
+              </button>
+            </div>
+            
+            <div class="kb-info" style="background-color: var(--bg-blue-light); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem;">
+              <h4 style="font-size: 0.875rem; margin-bottom: 0.5rem;"><i class="fas fa-info-circle"></i> Информация</h4>
+              <ul style="padding-left: 1.5rem; font-size: 0.875rem;">
+                <li>Поддерживаемые форматы: .txt, .pdf, .docx, .md, .rtf</li>
+                <li>Максимум 10 файлов на одного ассистента</li>
+                <li>Общий лимит: 1 000 000 символов</li>
+                <li>Для обработки документов используется ключ OpenAI API</li>
+              </ul>
+            </div>
+            
+            <div id="kb-documents-list" class="kb-documents">
+              <!-- Документы будут загружены динамически -->
+              <div class="empty-state">
+                <div class="empty-icon">
+                  <i class="fas fa-file-alt"></i>
+                </div>
+                <h3 class="empty-title">Нет документов</h3>
+                <p class="empty-description">
+                  Загрузите документы, чтобы создать базу знаний для вашего ассистента
+                </p>
+              </div>
+            </div>
+          </div>
+          
+          <div class="form-section">
+            <h3 style="margin-bottom: 1rem;">Как использовать базу знаний</h3>
+            <p>После загрузки и обработки документов ассистент сможет автоматически обращаться к этой информации при ответах на вопросы.</p>
+            
+            <div class="kb-usage-example" style="background-color: var(--bg-light); padding: 1rem; border-radius: var(--radius-md); margin-top: 1rem;">
+              <h4 style="font-size: 0.875rem; margin-bottom: 0.5rem;"><i class="fas fa-lightbulb"></i> Пример системного промпта:</h4>
+              <pre style="background-color: white; padding: 1rem; border-radius: var(--radius-md); font-size: 0.875rem; white-space: pre-wrap;">Ты умный голосовой помощник. Используй функцию search_knowledge для поиска информации в базе знаний, когда нужно ответить на вопрос, требующий специфических данных. Если информация не найдена в базе знаний, отвечай честно, что не знаешь.</pre>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     
@@ -1257,6 +1455,11 @@
           webhookInfo.style.display = this.checked ? 'block' : 'none';
         });
       }
+      
+      // Получаем элементы для работы с базой знаний
+      const kbUploadBtn = document.getElementById('kb-upload-btn');
+      const kbFileInput = document.getElementById('kb-file-input');
+      const kbSyncBtn = document.getElementById('kb-sync-btn');
       
       // Включение режима отладки (установите в true для показа панели отладки)
       const DEBUG_MODE = false;
@@ -1414,6 +1617,59 @@
         verifyGoogleSheet(assistantId, sheetId) {
           debugLog(`Проверка подключения к Google таблице ${sheetId}`);
           return this.post(`/assistants/${assistantId}/verify-sheet`, { sheet_id: sheetId });
+        },
+        
+        // Функции для работы с базой знаний
+        async getKnowledgeBaseStatus(assistantId) {
+          try {
+            const response = await this.get(`/knowledge-base/${assistantId}/status`);
+            return response;
+          } catch (error) {
+            throw error;
+          }
+        },
+
+        async uploadKnowledgeBaseFile(assistantId, file) {
+          try {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            const response = await fetch(`${this.baseUrl}/knowledge-base/${assistantId}/upload`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${this.getToken()}`
+              },
+              body: formData
+            });
+            
+            if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(errorData.detail || 'Failed to upload document');
+            }
+            
+            return await response.json();
+          } catch (error) {
+            console.error('Error uploading document:', error);
+            throw error;
+          }
+        },
+
+        async deleteKnowledgeBaseDocument(assistantId, documentId) {
+          try {
+            const response = await this.delete(`/knowledge-base/${assistantId}/documents/${documentId}`);
+            return response;
+          } catch (error) {
+            throw error;
+          }
+        },
+
+        async syncKnowledgeBase(assistantId) {
+          try {
+            const response = await this.post(`/knowledge-base/${assistantId}/sync`, {});
+            return response;
+          } catch (error) {
+            throw error;
+          }
         }
       };
       
@@ -1532,6 +1788,148 @@
           return formData;
         }
       };
+      
+      // Функции для обновления UI базы знаний
+      function updateKnowledgeBaseStatus(status) {
+        // Обновляем информацию о лимитах
+        document.getElementById('kb-docs-count').textContent = `${status.total_documents} / ${status.max_documents}`;
+        document.getElementById('kb-chars-count').textContent = `${status.total_chars} / ${status.max_chars}`;
+        
+        // Обновляем прогресс-бары
+        const docsPercent = (status.total_documents / status.max_documents) * 100;
+        document.getElementById('kb-docs-progress').style.width = `${docsPercent}%`;
+        
+        const charsPercent = (status.total_chars / status.max_chars) * 100;
+        document.getElementById('kb-chars-progress').style.width = `${charsPercent}%`;
+        
+        // Обновляем список документов
+        const docsContainer = document.getElementById('kb-documents-list');
+        docsContainer.innerHTML = '';
+        
+        if (status.documents.length === 0) {
+          docsContainer.innerHTML = `
+            <div class="empty-state">
+              <div class="empty-icon">
+                <i class="fas fa-file-alt"></i>
+              </div>
+              <h3 class="empty-title">Нет документов</h3>
+              <p class="empty-description">
+                Загрузите документы, чтобы создать базу знаний для вашего ассистента
+              </p>
+            </div>
+          `;
+          return;
+        }
+        
+        // Создаем таблицу документов
+        const table = document.createElement('table');
+        table.className = 'documents-table';
+        table.innerHTML = `
+          <thead>
+            <tr>
+              <th>Имя файла</th>
+              <th>Статус</th>
+              <th>Символов</th>
+              <th>Размер</th>
+              <th>Дата загрузки</th>
+              <th>Действия</th>
+            </tr>
+          </thead>
+          <tbody id="documents-tbody"></tbody>
+        `;
+        
+        docsContainer.appendChild(table);
+        const tbody = document.getElementById('documents-tbody');
+        
+        // Добавляем строки документов
+        status.documents.forEach(doc => {
+          const tr = document.createElement('tr');
+          
+          // Определяем статус документа
+          let statusClass = 'status-pending';
+          let statusText = 'В обработке';
+          
+          if (doc.status === 'processed') {
+            statusClass = 'status-processed';
+            statusText = 'Обработан';
+          } else if (doc.status === 'error') {
+            statusClass = 'status-error';
+            statusText = 'Ошибка';
+          }
+          
+          // Форматируем размер файла
+          const fileSize = formatFileSize(doc.size);
+          
+          // Форматируем дату
+          const uploadDate = new Date(doc.created_at).toLocaleString();
+          
+          tr.innerHTML = `
+            <td>${doc.original_filename}</td>
+            <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+            <td>${doc.chars_count}</td>
+            <td>${fileSize}</td>
+            <td>${uploadDate}</td>
+            <td>
+              <button class="btn btn-sm btn-danger delete-doc" data-id="${doc.id}">
+                <i class="fas fa-trash"></i>
+              </button>
+              ${doc.status === 'error' ? `<span class="error-tooltip" title="${doc.error_message || 'Неизвестная ошибка'}"><i class="fas fa-exclamation-circle"></i></span>` : ''}
+            </td>
+          `;
+          
+          tbody.appendChild(tr);
+        });
+        
+        // Добавляем обработчики для кнопок удаления
+        document.querySelectorAll('.delete-doc').forEach(button => {
+          button.addEventListener('click', async function() {
+            if (!currentAgentId) return;
+            
+            const docId = this.getAttribute('data-id');
+            const confirmed = confirm('Вы уверены, что хотите удалить этот документ из базы знаний?');
+            
+            if (confirmed) {
+              try {
+                setLoading(true);
+                await api.deleteKnowledgeBaseDocument(currentAgentId, docId);
+                
+                // Обновляем статус после удаления
+                await loadKnowledgeBaseStatus();
+                
+                ui.showNotification('Документ успешно удален', 'success');
+              } catch (error) {
+                ui.showNotification(error.message || 'Ошибка при удалении документа', 'error');
+              } finally {
+                setLoading(false);
+              }
+            }
+          });
+        });
+      }
+
+      // Вспомогательная функция для форматирования размера файла
+      function formatFileSize(bytes) {
+        if (bytes < 1024) {
+          return bytes + ' Б';
+        } else if (bytes < 1024 * 1024) {
+          return (bytes / 1024).toFixed(1) + ' КБ';
+        } else {
+          return (bytes / (1024 * 1024)).toFixed(1) + ' МБ';
+        }
+      }
+
+      // Функция для загрузки статуса базы знаний
+      async function loadKnowledgeBaseStatus() {
+        if (!currentAgentId) return;
+        
+        try {
+          const status = await api.getKnowledgeBaseStatus(currentAgentId);
+          updateKnowledgeBaseStatus(status);
+        } catch (error) {
+          console.error('Error loading knowledge base status:', error);
+          ui.showNotification(error.message || 'Ошибка при загрузке статуса базы знаний', 'error');
+        }
+      }
       
       // Проверка авторизации
       function checkAuth() {
@@ -1783,6 +2181,12 @@
         
         // Инициализируем обработчики для тестирования
         setupTestingTab();
+        
+        // Загружаем статус базы знаний, если активна соответствующая вкладка
+        const activeTab = document.querySelector('.tab.active');
+        if (activeTab && activeTab.getAttribute('data-tab') === 'knowledge-base') {
+          loadKnowledgeBaseStatus();
+        }
       }
       
       // Переключение на режим списка
@@ -1951,6 +2355,11 @@
                 }, 1000);
               }
             }
+            
+            // Если переключились на вкладку базы знаний
+            if (tabId === 'knowledge-base' && currentAgentId) {
+              loadKnowledgeBaseStatus();
+            }
           });
         });
       }
@@ -2017,6 +2426,11 @@
           const tabId = tab.getAttribute('data-tab');
           debugLog(`Переключение на вкладку: ${tabId}`);
           ui.switchTab(tabId);
+          
+          // Если перешли на вкладку базы знаний, загружаем статус
+          if (tabId === 'knowledge-base' && currentAgentId) {
+            loadKnowledgeBaseStatus();
+          }
         });
       });
       
@@ -2030,6 +2444,58 @@
           this.querySelector('input').checked = true;
           debugLog(`Выбран голос: ${this.querySelector('input').value}`);
         });
+      });
+      
+      // Обработчики для кнопок базы знаний
+      kbUploadBtn.addEventListener('click', function() {
+        kbFileInput.click();
+      });
+
+      kbFileInput.addEventListener('change', async function() {
+        if (!this.files || !this.files[0] || !currentAgentId) {
+          return;
+        }
+        
+        const file = this.files[0];
+        
+        try {
+          setLoading(true);
+          await api.uploadKnowledgeBaseFile(currentAgentId, file);
+          
+          // Очищаем поле выбора файла
+          this.value = '';
+          
+          // Обновляем статус после загрузки
+          await loadKnowledgeBaseStatus();
+          
+          ui.showNotification('Документ успешно загружен и отправлен на обработку', 'success');
+        } catch (error) {
+          ui.showNotification(error.message || 'Ошибка при загрузке документа', 'error');
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      kbSyncBtn.addEventListener('click', async function() {
+        if (!currentAgentId) return;
+        
+        const confirmed = confirm('Вы уверены, что хотите синхронизировать базу знаний? Это приведет к повторной обработке всех документов.');
+        
+        if (confirmed) {
+          try {
+            setLoading(true);
+            await api.syncKnowledgeBase(currentAgentId);
+            
+            // Обновляем статус после синхронизации
+            await loadKnowledgeBaseStatus();
+            
+            ui.showNotification('Синхронизация базы знаний запущена', 'success');
+          } catch (error) {
+            ui.showNotification(error.message || 'Ошибка при синхронизации базы знаний', 'error');
+          } finally {
+            setLoading(false);
+          }
+        }
       });
       
       // Кнопка "Код для встраивания"
