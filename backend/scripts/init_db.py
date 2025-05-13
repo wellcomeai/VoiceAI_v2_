@@ -1,16 +1,22 @@
 import os
 import psycopg2
 
-# Подключаемся к Render Postgres
+print("🔧 Запуск init_db.py...")
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-def run_sql_file(file_path):
-    with open(file_path, "r", encoding="utf-8") as f:
-        sql = f.read()
-    with psycopg2.connect(DATABASE_URL) as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-        conn.commit()
+if not DATABASE_URL:
+    raise Exception("⛔ DATABASE_URL не установлен!")
 
-if __name__ == "__main__":
-    run_sql_file("scripts/add_updated_at_column.sql")
+conn = psycopg2.connect(DATABASE_URL)
+cursor = conn.cursor()
+
+with open("scripts/add_updated_at_column.sql", "r") as sql_file:
+    query = sql_file.read()
+    cursor.execute(query)
+    conn.commit()
+
+print("✅ Миграция применена успешно.")
+
+cursor.close()
+conn.close()
