@@ -11,6 +11,7 @@ from sqlalchemy import Column, DateTime, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
 from sqlalchemy.orm import Session
+from backend.models.base import Base, BaseModel, ModelType, CreateSchemaType, UpdateSchemaType
 
 # Создаем базовый класс для всех моделей SQLAlchemy
 Base = declarative_base()
