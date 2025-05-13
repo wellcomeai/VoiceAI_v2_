@@ -1,22 +1,19 @@
+from sqlalchemy import create_engine, text
 import os
-import psycopg2
 
-print("🔧 Запуск init_db.py...")
+db_url = os.environ.get("DATABASE_URL")
+engine = create_engine(db_url)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-if not DATABASE_URL:
-    raise Exception("⛔ DATABASE_URL не установлен!")
-
-conn = psycopg2.connect(DATABASE_URL)
-cursor = conn.cursor()
-
-with open("scripts/add_updated_at_column.sql", "r") as sql_file:
-    query = sql_file.read()
-    cursor.execute(query)
-    conn.commit()
-
-print("✅ Миграция применена успешно.")
-
-cursor.close()
-conn.close()
+with engine.connect() as conn:
+    conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name='conversations' AND column_name='updated_at'
+            ) THEN
+                ALTER TABLE conversations ADD COLUMN updated_at TIMESTAMP DEFAULT now();
+            END IF;
+        END $$;
+    """))
+    print("✅ updated_at ensured.")
