@@ -1,23 +1,31 @@
 """
-Database models module for WellcomeAI application.
-This module contains SQLAlchemy ORM models that represent database tables.
+Models module for WellcomeAI application.
+Contains SQLAlchemy models for database tables.
 """
 
-from .base import Base, engine, create_tables  # Обновленный импорт
+# Import base model first
+from backend.db.base import Base, BaseModel
+
+# Import models in the correct order to avoid circular dependencies
 from .user import User
 from .assistant import AssistantConfig
 from .conversation import Conversation
 from .file import File
 from .integration import Integration
+from .subscription import SubscriptionPlan
+from .subscription_log import SubscriptionLog
+from .knowledge_base import KnowledgeBaseDocument
 
-# Export specific models
+# Export models
 __all__ = [
-    "Base", 
-    "engine", 
-    "create_tables",  # Добавлен в экспорт
-    "User", 
+    "Base",
+    "BaseModel",
+    "User",
     "AssistantConfig", 
-    "Conversation", 
-    "File"
-    "Integration"
+    "Conversation",
+    "File",
+    "Integration",
+    "SubscriptionPlan",
+    "SubscriptionLog",
+    "KnowledgeBaseDocument"
 ]
