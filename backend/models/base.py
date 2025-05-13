@@ -163,10 +163,8 @@ def create_tables(engine):
     Args:
         engine: SQLAlchemy engine
     """
-    # Импортируем все модели, чтобы убедиться, что они зарегистрированы с Base
-    from backend.models import User, AssistantConfig, Conversation, File, Integration, SubscriptionPlan, SubscriptionLog, KnowledgeBaseDocument
-    
-    # Создаем таблицы
+    # Импортируем модели, только когда необходимо создать таблицы
+    # Это помогает избежать циклических импортов
     Base.metadata.create_all(bind=engine)
     
     from backend.core.logging import get_logger
