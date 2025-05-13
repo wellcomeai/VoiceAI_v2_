@@ -18,7 +18,6 @@ class Conversation(BaseModel):
     """
     __tablename__ = "conversations"
 
-    # Удалены поля id и created_at, которые уже определены в BaseModel
     assistant_id = Column(UUID(as_uuid=True), ForeignKey("assistant_configs.id", ondelete="CASCADE"), nullable=False)
     session_id = Column(String, nullable=True, index=True)  # Group related messages
     user_message = Column(Text, nullable=True)
@@ -31,7 +30,7 @@ class Conversation(BaseModel):
     is_flagged = Column(Boolean, default=False)  # Flagged for review
     audio_duration = Column(Float, nullable=True)  # Duration of audio in seconds
 
-    # Relationships
+    # Relationships - убедись, что имя переменной assistant и back_populates="conversations" совпадает с AssistantConfig
     assistant = relationship("AssistantConfig", back_populates="conversations")
 
     def __repr__(self):
