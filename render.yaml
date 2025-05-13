@@ -2,11 +2,11 @@ services:
   - type: web
     name: wellcomeai
     env: python
-    runtime: "python-3.10.11"  # Explicitly use Python 3.10.11
+    runtime: "python-3.10.11"
     region: frankfurt
     buildCommand: pip install -r requirements.txt
+    preDeployCommand: python scripts/init_db.py  # именно здесь, не в buildCommand!
     startCommand: gunicorn -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:$PORT main:application
-    preDeployCommand: python scripts/init_db.py
     envVars:
       - key: OPENAI_API_KEY
         sync: false
