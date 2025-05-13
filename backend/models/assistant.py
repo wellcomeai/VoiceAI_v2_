@@ -40,10 +40,15 @@ class AssistantConfig(Base):
     
     # Relationship with Files
     files = relationship("File", back_populates="assistant", cascade="all, delete-orphan")
-    # Добавить к существующей модели
-knowledge_base_documents = relationship("KnowledgeBaseDocument", back_populates="assistant", cascade="all, delete-orphan")
     
-    # Define relationship with integrations
+    # Relationship with Knowledge Base Documents
+    knowledge_base_documents = relationship(
+        "KnowledgeBaseDocument",
+        back_populates="assistant",
+        cascade="all, delete-orphan"
+    )
+    
+    # Relationship with Integrations
     integrations = relationship(
         "Integration",
         primaryjoin="AssistantConfig.id == Integration.assistant_id",
