@@ -6,7 +6,7 @@ from sqlalchemy import Column, String, Text, Boolean, Integer, Float, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, backref
 
-from backend.db.base import BaseModel
+from backend.models.base import BaseModel
 
 class AssistantConfig(BaseModel):
     """Model for AI assistant configuration"""
@@ -30,5 +30,9 @@ class AssistantConfig(BaseModel):
     
     # Relationships
     user = relationship("User", back_populates="assistants")
+    # Добавляем связь с Conversation
+    conversations = relationship("Conversation", back_populates="assistant", cascade="all, delete-orphan")
     # Define relationship with KnowledgeBaseDocument using string reference to avoid circular import
     knowledge_base_documents = relationship("KnowledgeBaseDocument", back_populates="assistant", cascade="all, delete-orphan")
+    # Добавляем связь с File, если её нет
+    files = relationship("File", back_populates="assistant", cascade="all, delete-orphan")
