@@ -10,15 +10,15 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy import Boolean
 
-from .base import Base, BaseModel
+from backend.models.base import BaseModel
 
-class Conversation(Base, BaseModel):
+class Conversation(BaseModel):
     """
     Conversation model representing chat interactions with assistants.
     """
     __tablename__ = "conversations"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Удалены поля id и created_at, которые уже определены в BaseModel
     assistant_id = Column(UUID(as_uuid=True), ForeignKey("assistant_configs.id", ondelete="CASCADE"), nullable=False)
     session_id = Column(String, nullable=True, index=True)  # Group related messages
     user_message = Column(Text, nullable=True)
@@ -29,7 +29,6 @@ class Conversation(Base, BaseModel):
     feedback_rating = Column(Integer, nullable=True)  # User feedback (1-5)
     feedback_text = Column(Text, nullable=True)  # Detailed user feedback
     is_flagged = Column(Boolean, default=False)  # Flagged for review
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
     audio_duration = Column(Float, nullable=True)  # Duration of audio in seconds
 
     # Relationships
