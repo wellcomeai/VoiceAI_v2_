@@ -1,57 +1,34 @@
-"""
-Assistant models for WellcomeAI application.
-"""
-
 import uuid
-from sqlalchemy import Column, String, Boolean, ForeignKey, DateTime, JSON, func, Integer, Float
+from datetime import datetime
+from typing import Optional, List, Dict, Any
+
+from sqlalchemy import Column, String, Text, Boolean, Integer, Float, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 
-from backend.models.base import Base
+from backend.db.base import BaseModel
 
-class AssistantConfig(Base):
-    """
-    Configuration for a voice assistant.
-    """
+class AssistantConfig(BaseModel):
+    """Model for AI assistant configuration"""
     __tablename__ = "assistant_configs"
     
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name = Column(String, nullable=False)
-    description = Column(String, nullable=True)
-    system_prompt = Column(String, nullable=True)
-    voice = Column(String, default="alloy", nullable=False)
-    language = Column(String, default="ru", nullable=False)
+    description = Column(Text, nullable=True)
+    system_prompt = Column(Text, nullable=False)
+    voice = Column(String, nullable=False, default="alloy")
+    language = Column(String, nullable=False, default="ru")
     google_sheet_id = Column(String, nullable=True)
-    is_active = Column(Boolean, default=True, nullable=False)
-    is_public = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=func.now(), nullable=False)
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
-    total_conversations = Column(Integer, default=0, nullable=False)
-    temperature = Column(Float, default=0.7, nullable=False)
-    max_tokens = Column(Integer, default=1000, nullable=False)
     functions = Column(JSON, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_public = Column(Boolean, nullable=False, default=False)
+    api_access_token = Column(String, nullable=True)
+    total_conversations = Column(Integer, nullable=False, default=0)
+    total_tokens = Column(Integer, nullable=False, default=0)
+    temperature = Column(Float, nullable=False, default=0.7)
+    max_tokens = Column(Integer, nullable=False, default=500)
     
-    # Relationship with User
+    # Relationships
     user = relationship("User", back_populates="assistants")
-    
-    # Relationship with Conversations
-    conversations = relationship("Conversation", back_populates="assistant", cascade="all, delete-orphan")
-    
-    # Relationship with Files
-    files = relationship("File", back_populates="assistant", cascade="all, delete-orphan")
-    
-    # Relationship with Knowledge Base Documents
-    knowledge_base_documents = relationship(
-        "KnowledgeBaseDocument",
-        back_populates="assistant",
-        cascade="all, delete-orphan"
-    )
-    
-    # Relationship with Integrations
-    integrations = relationship(
-        "Integration",
-        primaryjoin="AssistantConfig.id == Integration.assistant_id",
-        cascade="all, delete-orphan",
-        back_populates="assistant"
-    )
+    # Define relationship with KnowledgeBaseDocument using string reference to avoid circular import
+    knowledge_base_documents = relationship("KnowledgeBaseDocument", back_populates="assistant", cascade="all, delete-orphan")
