@@ -2,22 +2,19 @@
 Модель пользователя для приложения WellcomeAI.
 Представляет пользователя с данными аутентификации и профиля.
 """
-
 import uuid
 from sqlalchemy import Column, String, Boolean, JSON, DateTime, Integer, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from backend.db.base import BaseModel
 
-from .base import Base, BaseModel
-
-class User(Base, BaseModel):
+class User(BaseModel):
     """
     Модель пользователя, представляющая пользователей приложения.
     """
     __tablename__ = "users"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
     email = Column(String, unique=True, nullable=False, index=True)
     password_hash = Column(String, nullable=False)
     first_name = Column(String, nullable=True)
@@ -30,8 +27,6 @@ class User(Base, BaseModel):
     google_sheets_token = Column(JSON, nullable=True)
     google_sheets_authorized = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Новые поля для системы тарификации
     subscription_plan_id = Column(UUID(as_uuid=True), ForeignKey("subscription_plans.id"), nullable=True)
@@ -40,12 +35,12 @@ class User(Base, BaseModel):
     is_trial = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
     payment_status = Column(String(50), nullable=True)
-
+    
     # Отношения
     assistants = relationship("AssistantConfig", back_populates="user", cascade="all, delete-orphan")
     files = relationship("File", back_populates="user", cascade="all, delete-orphan")
     subscription_plan_rel = relationship("SubscriptionPlan", foreign_keys=[subscription_plan_id])
-
+    
     def __repr__(self):
         """Строковое представление пользователя"""
         return f"<User {self.email}>"
