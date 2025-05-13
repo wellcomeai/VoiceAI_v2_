@@ -3,10 +3,10 @@ Models module for WellcomeAI application.
 Contains SQLAlchemy models for database tables.
 """
 
-# Import base model first
-from backend.db.base import Base, BaseModel
+# Импортируем Base и BaseModel напрямую из .base вместо из db.base
+from .base import Base, BaseModel
 
-# Import models in the correct order to avoid circular dependencies
+# Импортируем модели в правильном порядке для избежания циклических зависимостей
 from .user import User
 from .assistant import AssistantConfig
 from .conversation import Conversation
