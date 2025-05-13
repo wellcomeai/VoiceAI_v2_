@@ -5,13 +5,14 @@ from sqlalchemy import Column, String, Integer, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
-from backend.db.base import BaseModel
+from backend.models.base import BaseModel
 
 class KnowledgeBaseDocument(BaseModel):
     """Model for knowledge base documents associated with an assistant"""
     __tablename__ = "knowledge_base_documents"
     
-    assistant_id = Column(UUID(as_uuid=True), ForeignKey("assistants.id", ondelete="CASCADE"), nullable=False)
+    # Исправляем имя таблицы в ForeignKey с "assistants" на "assistant_configs"
+    assistant_id = Column(UUID(as_uuid=True), ForeignKey("assistant_configs.id", ondelete="CASCADE"), nullable=False)
     filename = Column(String, nullable=False)
     original_filename = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
