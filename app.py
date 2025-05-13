@@ -10,10 +10,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.core.config import settings
 from backend.core.logging import setup_logging, get_logger
 from backend.api import auth, users, assistants, files, websocket, healthcheck, subscriptions, subscription_logs, admin
-from backend.models.base import create_tables
 from backend.db.session import engine
 from backend.core.scheduler import start_subscription_checker
 from backend.api import knowledge_base
+
+# Make sure all models are imported before creating tables
+import backend.models
+
+# Import create_tables only after importing all models
+from backend.models.base import create_tables
 
 # Setup logging system
 setup_logging()
