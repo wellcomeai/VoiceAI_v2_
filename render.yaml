@@ -4,10 +4,9 @@ services:
     env: python
     runtime: "python-3.10.11"  # Explicitly use Python 3.10.11
     region: frankfurt
-    buildCommand: |
-      pip install -r requirements.txt
-      python scripts/init_db.py  # запускаем миграцию
+    buildCommand: pip install -r requirements.txt
     startCommand: gunicorn -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:$PORT main:application
+    preDeployCommand: python scripts/init_db.py
     envVars:
       - key: OPENAI_API_KEY
         sync: false
