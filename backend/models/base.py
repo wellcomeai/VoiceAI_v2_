@@ -155,3 +155,20 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
             db.delete(obj)
             db.commit()
         return obj
+
+def create_tables(engine):
+    """
+    Создает таблицы базы данных для всех моделей.
+    
+    Args:
+        engine: SQLAlchemy engine
+    """
+    # Импортируем все модели, чтобы убедиться, что они зарегистрированы с Base
+    from backend.models import User, AssistantConfig, Conversation, File, Integration, SubscriptionPlan, SubscriptionLog, KnowledgeBaseDocument
+    
+    # Создаем таблицы
+    Base.metadata.create_all(bind=engine)
+    
+    from backend.core.logging import get_logger
+    logger = get_logger(__name__)
+    logger.info("Таблицы базы данных успешно созданы")
