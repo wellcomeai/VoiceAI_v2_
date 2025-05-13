@@ -10,16 +10,16 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from .base import Base, BaseModel
+from backend.models.base import BaseModel
 from backend.core.config import settings
 
-class File(Base, BaseModel):
+class File(BaseModel):
     """
     File model representing uploaded files for assistant knowledge base.
     """
     __tablename__ = "files"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Удалены поля id, created_at и updated_at - они уже определены в BaseModel
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     assistant_id = Column(UUID(as_uuid=True), ForeignKey("assistant_configs.id", ondelete="CASCADE"), nullable=True)
     
@@ -34,10 +34,6 @@ class File(Base, BaseModel):
     processed = Column(Boolean, default=False)
     processing_error = Column(Text, nullable=True)
     openai_file_id = Column(String, nullable=True)  # ID in OpenAI system
-    
-    # Timestamps
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
     user = relationship("User", back_populates="files")
