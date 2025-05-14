@@ -8,6 +8,7 @@ import re
 from websockets.exceptions import ConnectionClosed
 
 from typing import Optional, List, Dict, Any, Union, AsyncGenerator
+from sqlalchemy import text
 
 from backend.core.config import settings
 from backend.core.logging import get_logger
@@ -323,19 +324,47 @@ class OpenAIRealtimeClient:
         # Create a conversation record in the database if available
         if self.db_session:
             try:
-                conv = Conversation(
-                    assistant_id=self.assistant_config.id,
-                    session_id=self.session_id,
-                    user_message="",
-                    assistant_message="",
-                )
-                self.db_session.add(conv)
+                # Генерируем UUID для новой записи
+                conversation_id = str(uuid.uuid4())
+                
+                # Используем прямой SQL-запрос для создания записи
+                query = text("""
+                    INSERT INTO conversations 
+                    (id, assistant_id, session_id, user_message, assistant_message, 
+                     duration_seconds, tokens_used, feedback_rating, 
+                     feedback_text, is_flagged, audio_duration, created_at) 
+                    VALUES 
+                    (:id, :assistant_id, :session_id, :user_message, :assistant_message,
+                     :duration_seconds, :tokens_used, :feedback_rating,
+                     :feedback_text, :is_flagged, :audio_duration, NOW())
+                """)
+                
+                # Параметры для запроса
+                params = {
+                    "id": conversation_id,
+                    "assistant_id": str(self.assistant_config.id),
+                    "session_id": self.session_id,
+                    "user_message": "",
+                    "assistant_message": "",
+                    "duration_seconds": None,
+                    "tokens_used": 0,
+                    "feedback_rating": None,
+                    "feedback_text": None,
+                    "is_flagged": False,
+                    "audio_duration": None
+                }
+                
+                # Выполняем запрос
+                self.db_session.execute(query, params)
                 self.db_session.commit()
-                self.db_session.refresh(conv)
-                self.conversation_record_id = str(conv.id)
+                
+                # Сохраняем ID записи
+                self.conversation_record_id = conversation_id
                 logger.info(f"Created conversation record: {self.conversation_record_id}")
             except Exception as e:
+                self.db_session.rollback()
                 logger.error(f"Error creating Conversation in DB: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
 
         return True
 
@@ -367,257 +396,3 @@ class OpenAIRealtimeClient:
             if isinstance(arguments, str):
                 try:
                     arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    logger.warning(f"Failed to parse function arguments as JSON: {arguments}")
-                    arguments = {}
-            
-            # Если это webhook и URL не указан, но есть в промпте
-            if function_name == "send_webhook" and "url" not in arguments and self.webhook_url:
-                arguments["url"] = self.webhook_url
-                logger.info(f"Добавлен URL из промпта в аргументы функции: {self.webhook_url}")
-            
-            # Если event не указан, используем значение по умолчанию
-            if function_name == "send_webhook" and "event" not in arguments:
-                arguments["event"] = "default_event"
-                logger.info(f"Добавлен параметр event по умолчанию: 'default_event'")
-            
-            logger.info(f"Processing function call: {function_name} with arguments: {arguments}")
-            
-            # Execute the function
-            result = await execute_function(
-                function_name=function_name, 
-                arguments=arguments,
-                assistant_config=self.assistant_config,
-                client_id=self.client_id
-            )
-            
-            return result
-        except Exception as e:
-            logger.error(f"Error processing function call: {e}")
-            return {"error": str(e)}
-
-    async def send_function_result(self, function_call_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Send the result of a function execution back to OpenAI as a conversation.item.create event.
-        
-        Args:
-            function_call_id: ID of the function call
-            result: Result of the function execution
-            
-        Returns:
-            Dict: Status information about the result delivery
-                {
-                    "success": bool,
-                    "error": str or None,
-                    "payload": dict - payload that was sent 
-                }
-        """
-        if not self.is_connected or not self.ws:
-            error_msg = "Cannot send function result: not connected"
-            logger.error(error_msg)
-            return {
-                "success": False,
-                "error": error_msg,
-                "payload": None
-            }
-        
-        try:
-            logger.info(f"[DEBUG-FUNCTION] Начало отправки результата функции: {function_call_id}")
-            
-            # Генерируем короткий ID длиной до 32 символов
-            short_item_id = generate_short_id("func_")
-            
-            # Преобразуем результат в строку JSON
-            # OpenAI ожидает, что поле output будет строкой, а не объектом
-            result_json = json.dumps(result)
-            
-            # Исправленная структура для отправки результата функции
-            payload = {
-                "type": "conversation.item.create",
-                "event_id": f"funcres_{time.time()}",
-                "item": {
-                    "id": short_item_id,  # Максимум 32 символа
-                    "type": "function_call_output",
-                    "call_id": function_call_id,
-                    "output": result_json  # Строка вместо объекта
-                }
-            }
-            
-            logger.info(f"Отправка результата функции: {function_call_id}")
-            logger.info(f"Payload: {json.dumps(payload, ensure_ascii=False)[:200]}...")
-            
-            await self.ws.send(json.dumps(payload))
-            logger.info(f"Результат функции отправлен как item.create: {function_call_id}")
-            
-            # Добавляем небольшую задержку перед запросом нового ответа
-            logger.info(f"[DEBUG-FUNCTION] Ожидание перед созданием нового ответа (500мс)")
-            await asyncio.sleep(0.5)  # 500 мс должно быть достаточно
-            
-            # После отправки результата, явно запрашиваем новый ответ от модели
-            await self.create_response_after_function()
-            
-            logger.info(f"[DEBUG-FUNCTION] Результат функции отправлен и запрос на новый ответ выполнен")
-            
-            return {
-                "success": True,
-                "error": None,
-                "payload": payload
-            }
-            
-        except Exception as e:
-            error_msg = f"Error sending function result: {e}"
-            logger.error(error_msg)
-            return {
-                "success": False,
-                "error": error_msg,
-                "payload": None
-            }
-
-    async def create_response_after_function(self) -> bool:
-        """
-        Явно запрашивает новый ответ от модели после выполнения функции.
-        Это обеспечит генерацию аудио-ответа.
-        
-        Returns:
-            bool: True если успешно, False иначе
-        """
-        if not self.is_connected or not self.ws:
-            logger.error("Cannot create response: not connected")
-            return False
-            
-        try:
-            logger.info(f"[DEBUG-FUNCTION] Создание нового ответа после выполнения функции")
-            
-            # Запрашиваем новый ответ от модели с более полным набором параметров
-            response_payload = {
-                "type": "response.create",
-                "event_id": f"resp_after_func_{time.time()}",
-                "response": {
-                    "modalities": ["text", "audio"],
-                    "voice": self.assistant_config.voice or DEFAULT_VOICE,
-                    "instructions": getattr(self.assistant_config, "system_prompt", None) or DEFAULT_SYSTEM_MESSAGE,
-                    "temperature": 0.7,
-                    "max_output_tokens": 200
-                }
-            }
-            
-            await self.ws.send(json.dumps(response_payload))
-            logger.info("Запрошен новый ответ после выполнения функции")
-            
-            logger.info(f"[DEBUG-FUNCTION] Запрос на создание нового ответа отправлен успешно")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error creating response after function: {e}")
-            return False
-
-    async def process_audio(self, audio_buffer: bytes) -> bool:
-        """
-        Process and send audio data to the OpenAI API.
-        
-        Args:
-            audio_buffer: Binary audio data in PCM16 format
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        if not self.is_connected or not self.ws or not audio_buffer:
-            return False
-        try:
-            data_b64 = base64.b64encode(audio_buffer).decode("utf-8")
-            await self.ws.send(json.dumps({
-                "type": "input_audio_buffer.append",
-                "audio": data_b64,
-                "event_id": f"audio_{time.time()}"
-            }))
-            return True
-        except ConnectionClosed:
-            logger.error("Connection closed while sending audio data")
-            self.is_connected = False
-            return False
-        except Exception as e:
-            logger.error(f"Error processing audio: {e}")
-            return False
-
-    async def commit_audio(self) -> bool:
-        """
-        Commit the audio buffer, indicating that the user has finished speaking.
-        
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        if not self.is_connected or not self.ws:
-            return False
-        try:
-            await self.ws.send(json.dumps({
-                "type": "input_audio_buffer.commit",
-                "event_id": f"commit_{time.time()}"
-            }))
-            return True
-        except ConnectionClosed:
-            logger.error("Connection closed while committing audio")
-            self.is_connected = False
-            return False
-        except Exception as e:
-            logger.error(f"Error committing audio: {e}")
-            return False
-
-    async def clear_audio_buffer(self) -> bool:
-        """
-        Clear the audio buffer, removing any pending audio data.
-        
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        if not self.is_connected or not self.ws:
-            return False
-        try:
-            await self.ws.send(json.dumps({
-                "type": "input_audio_buffer.clear",
-                "event_id": f"clear_{time.time()}"
-            }))
-            return True
-        except ConnectionClosed:
-            logger.error("Connection closed while clearing audio buffer")
-            self.is_connected = False
-            return False
-        except Exception as e:
-            logger.error(f"Error clearing audio buffer: {e}")
-            return False
-
-    async def close(self) -> None:
-        """
-        Close the WebSocket connection.
-        """
-        if self.ws:
-            try:
-                await self.ws.close()
-                logger.info(f"WebSocket connection closed for client {self.client_id}")
-            except Exception as e:
-                logger.error(f"Error closing OpenAI WebSocket: {e}")
-        self.is_connected = False
-
-    async def receive_messages(self) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Receive and yield messages from the OpenAI WebSocket.
-        
-        Yields:
-            Dict: Message received from the OpenAI WebSocket
-        """
-        if not self.is_connected or not self.ws:
-            return
-            
-        try:
-            async for message in self.ws:
-                try:
-                    data = json.loads(message)
-                    yield data
-                except json.JSONDecodeError:
-                    logger.error(f"Failed to decode message: {message[:100]}...")
-        except ConnectionClosed:
-            logger.info(f"WebSocket connection closed for client {self.client_id}")
-            self.is_connected = False
-        except Exception as e:
-            logger.error(f"Error receiving messages: {e}")
-            self.is_connected = False
