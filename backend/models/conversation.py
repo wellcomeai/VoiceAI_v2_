@@ -8,7 +8,7 @@ from sqlalchemy import Column, String, Float, JSON, ForeignKey, DateTime, Text, 
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from sqlalchemy import Boolean
+from sqlalchemy import Boolean, event
 
 from backend.models.base import BaseModel
 
@@ -18,10 +18,14 @@ class Conversation(BaseModel):
     """
     __tablename__ = "conversations"
 
-    # Добавляем это, чтобы исключить поле updated_at из маппинга
+    # Более агрессивное исключение поля updated_at из маппинга
     __mapper_args__ = {
         'exclude_properties': ['updated_at']
     }
+    
+    # Переопределяем метод для предотвращения обновления updated_at
+    def _sa_instance_state(self):
+        return super()._sa_instance_state()
 
     assistant_id = Column(UUID(as_uuid=True), ForeignKey("assistant_configs.id", ondelete="CASCADE"), nullable=False)
     session_id = Column(String, nullable=True, index=True)  # Group related messages
@@ -59,3 +63,12 @@ class Conversation(BaseModel):
         return db_session.query(cls).filter(
             cls.assistant_id == assistant_id
         ).order_by(cls.created_at.desc()).limit(limit).all()
+
+# Добавляем обработчик события перед обновлением объекта
+@event.listens_for(Conversation, 'before_update')
+def conversation_before_update(mapper, connection, target):
+    # Предотвращаем автоматическое обновление updated_at
+    if hasattr(target, '_sa_instance_state'):
+        state = target._sa_instance_state
+        if 'updated_at' in state.dict:
+            del state.dict['updated_at']
