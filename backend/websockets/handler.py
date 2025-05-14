@@ -1,6 +1,7 @@
 # backend/websockets/handler.py
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import json
 import asyncio
 import uuid
@@ -23,6 +24,17 @@ logger = get_logger(__name__)
 # Активные соединения по каждому assistant_id
 active_connections: Dict[str, List[WebSocket]] = {}
 
+# Функция для проверки состояния БД и выполнения rollback при необходимости
+def ensure_db_session_valid(db_session):
+    """Проверяет и восстанавливает сессию БД, если она в состоянии rollback"""
+    if db_session and db_session.is_active and hasattr(db_session, 'in_transaction') and db_session.in_transaction():
+        try:
+            # Проверяем состояние сессии
+            db_session.execute(text("SELECT 1"))
+        except:
+            # Если ошибка - делаем rollback
+            logger.warning("DB session in pending rollback state, performing rollback")
+            db_session.rollback()
 
 async def handle_websocket_connection(
     websocket: WebSocket,
@@ -506,14 +518,17 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                         # Сохраняем сообщение пользователя в БД
                         if openai_client.db_session and openai_client.conversation_record_id:
                             try:
-                                conv = openai_client.db_session.query(Conversation).get(
-                                    uuid.UUID(openai_client.conversation_record_id)
-                                )
-                                if conv:
-                                    conv.user_message = user_transcript
-                                    openai_client.db_session.commit()
-                                    logger.info(f"[DEBUG] Сохранено сообщение пользователя в БД")
+                                # Проверяем состояние сессии перед работой с БД
+                                ensure_db_session_valid(openai_client.db_session)
+                                
+                                # Используем прямой SQL-запрос вместо ORM
+                                query = text("UPDATE conversations SET user_message = :message WHERE id = :id")
+                                params = {"message": user_transcript, "id": openai_client.conversation_record_id}
+                                openai_client.db_session.execute(query, params)
+                                openai_client.db_session.commit()
+                                logger.info(f"[DEBUG] Сохранено сообщение пользователя в БД")
                             except Exception as e:
+                                openai_client.db_session.rollback()
                                 logger.error(f"[DEBUG] Ошибка сохранения в БД: {str(e)}")
                 
                 # Обработка частей транскрипции для обоих типов сообщений
@@ -609,17 +624,30 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                     if openai_client.db_session and openai_client.conversation_record_id and assistant_transcript:
                         logger.info(f"[DEBUG] Сохранение ответа ассистента в БД: {openai_client.conversation_record_id}")
                         try:
-                            conv = openai_client.db_session.query(Conversation).get(
-                                uuid.UUID(openai_client.conversation_record_id)
-                            )
-                            if conv:
-                                conv.assistant_message = assistant_transcript
-                                # Также обновляем пользовательское сообщение, если оно есть
-                                if user_transcript and not conv.user_message:
-                                    conv.user_message = user_transcript
-                                openai_client.db_session.commit()
+                            # Проверяем состояние сессии перед работой с БД
+                            ensure_db_session_valid(openai_client.db_session)
+                            
+                            # Используем прямой SQL-запрос вместо ORM
+                            query = text("UPDATE conversations SET assistant_message = :message WHERE id = :id")
+                            params = {"message": assistant_transcript, "id": openai_client.conversation_record_id}
+                            openai_client.db_session.execute(query, params)
+                            
+                            # Если есть текст пользователя и он еще не сохранен, сохраняем его тоже
+                            if user_transcript:
+                                # Проверяем, пустое ли поле user_message в БД
+                                check_query = text("SELECT user_message FROM conversations WHERE id = :id")
+                                result = openai_client.db_session.execute(check_query, {"id": openai_client.conversation_record_id}).fetchone()
+                                
+                                if not result or not result[0]:
+                                    update_query = text("UPDATE conversations SET user_message = :message WHERE id = :id")
+                                    openai_client.db_session.execute(update_query, {"message": user_transcript, "id": openai_client.conversation_record_id})
+                            
+                            openai_client.db_session.commit()
+                            logger.info(f"[DEBUG] Сохранен ответ ассистента в БД")
                         except Exception as e:
+                            openai_client.db_session.rollback()
                             logger.error(f"[DEBUG] Ошибка при сохранении ответа ассистента: {str(e)}")
+                            logger.error(f"[DEBUG] Трассировка: {traceback.format_exc()}")
                     
                     # Если у ассистента есть google_sheet_id, логируем разговор
                     if openai_client.assistant_config and openai_client.assistant_config.google_sheet_id:
@@ -634,14 +662,16 @@ async def handle_openai_messages(openai_client: OpenAIRealtimeClient, websocket:
                             # Пробуем получить данные из БД
                             if openai_client.db_session and openai_client.conversation_record_id:
                                 try:
-                                    conv = openai_client.db_session.query(Conversation).get(
-                                        uuid.UUID(openai_client.conversation_record_id)
-                                    )
-                                    if conv:
-                                        user_transcript = conv.user_message or ""
-                                        assistant_transcript = conv.assistant_message or ""
+                                    # Используем прямой SQL-запрос вместо ORM
+                                    query = text("SELECT user_message, assistant_message FROM conversations WHERE id = :id")
+                                    result = openai_client.db_session.execute(query, {"id": openai_client.conversation_record_id}).fetchone()
+                                    
+                                    if result:
+                                        user_transcript = result[0] or ""
+                                        assistant_transcript = result[1] or ""
                                         logger.info(f"[DEBUG] Получены данные из БД: пользователь: '{user_transcript}', ассистент: '{assistant_transcript}'")
                                 except Exception as e:
+                                    openai_client.db_session.rollback()
                                     logger.error(f"[DEBUG] Ошибка при получении данных из БД: {str(e)}")
                         
                         # Используем сохраненные значения для записи в Google Sheets
