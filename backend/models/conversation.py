@@ -18,6 +18,11 @@ class Conversation(BaseModel):
     """
     __tablename__ = "conversations"
 
+    # Добавляем это, чтобы исключить поле updated_at из маппинга
+    __mapper_args__ = {
+        'exclude_properties': ['updated_at']
+    }
+
     assistant_id = Column(UUID(as_uuid=True), ForeignKey("assistant_configs.id", ondelete="CASCADE"), nullable=False)
     session_id = Column(String, nullable=True, index=True)  # Group related messages
     user_message = Column(Text, nullable=True)
